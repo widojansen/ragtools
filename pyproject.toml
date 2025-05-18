@@ -1,0 +1,18 @@
+[project]
+name = "ragtools"
+version = "0.1.3"
+description = "Tools for RAG apps"
+readme = "README.md"
+requires-python = ">=3.12"
+dependencies = [
+    "streamlit",
+    "psutil"
+]
+
+[project.optional-dependencies]
+langchain = [
+    "langchain",
+    "langchain-community",
+    "langchain-ollama",
+    "chromadb"
+]
