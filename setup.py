@@ -2,20 +2,18 @@ from setuptools import setup, find_packages
 
 setup(
     name="ragtools",
-    version="0.1.3",
+    version="0.1.4",
     packages=find_packages(),  # This is crucial for proper package discovery
     install_requires=[
         "streamlit",
         "psutil",
+        "langchain",
+        "langchain-community",
+        "langchain-ollama",
+        "chromadb",
+        "langchain-chroma",
+        "pypdf"
     ],
-    extras_require={
-        "langchain": [
-            "langchain",
-            "langchain-community",
-            "langchain-ollama",
-            "chromadb",
-        ],
-    },
     author="Wido Jansen",
     author_email="widojansen@gmail.com",
     description="Tools for RAG applications",
