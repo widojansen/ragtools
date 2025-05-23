@@ -136,8 +136,29 @@ def run():
     if "messages" not in st.session_state:
         st.session_state.messages = []
 
-    if "system_context" not in st.session_state:
-        st.session_state.system_context = "You are a helpful RAG assistant. Answer questions based on the provided knowledge base."
+    # Check if system_prompt.txt exists in project root and load it
+    default_system_context = "You are a helpful RAG assistant. Answer questions based on the provided knowledge base."
+    
+    # Try to find system_prompt.txt at the project root level
+    try:
+        # Get the root project directory (BraceFaceRag)
+        project_root = os.path.dirname(os.path.dirname(os.path.dirname(__file__)))
+        system_prompt_file = os.path.join(project_root, "system_prompt.txt")
+        
+        if "system_context" not in st.session_state:
+            if os.path.exists(system_prompt_file):
+                try:
+                    with open(system_prompt_file, 'r') as f:
+                        st.session_state.system_context = f.read().strip()
+                except Exception as e:
+                    st.error(f"Error reading system prompt file: {e}")
+                    st.session_state.system_context = default_system_context
+            else:
+                st.session_state.system_context = default_system_context
+    except Exception as e:
+        st.error(f"Error setting up system context: {e}")
+        if "system_context" not in st.session_state:
+            st.session_state.system_context = default_system_context
 
     if "temperature" not in st.session_state:
         st.session_state.temperature = 0.7
@@ -250,10 +271,10 @@ def run():
 
             with col1:
                 st.text_input(
-                    "",
+                    "Ask your data...",  # Use this as the label
                     placeholder="Ask anything about your data...",
                     key=input_key,
-                    label_visibility="collapsed"
+                    label_visibility="collapsed"  # This will hide the label
                 )
 
             with col2:
