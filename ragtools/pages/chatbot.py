@@ -47,27 +47,73 @@ def log_chat(user, bot):
 
 def ask_llm(prompt, system_context="", model_context=None):
     """
-    Send a prompt to the language model with optional system context and model context
-    
-    NOTE: THIS IS A PLACEHOLDER FUNCTION. You must replace it with your own LLM integration
-    before using this application. See the README.md for examples of integrating with
-    different LLM backends (OpenAI, Ollama, etc.).
-
-    Args:
-        prompt: The user's message
-        system_context: System instructions to prepend to the message
-        model_context: The context for conversation history
-
-    Returns:
-        Tuple of (response, new_context)
+    Send a prompt to the language model with retrieved context from the vector store
     """
-    # This is a placeholder function that should be replaced with your LLM implementation
-    response = (
-        "⚠️ This is a placeholder response. You need to implement LLM integration.\n\n"
-        f"You asked: {prompt}\n\n"
-        "See README.md for examples of how to integrate with OpenAI, Ollama, or other LLM backends."
-    )
-    return response, model_context
+    try:
+        from ragtools.import_rag_data import get_retriever
+        from langchain_community.llms import Ollama
+        from langchain.chains import RetrievalQA
+        from langchain.prompts import PromptTemplate
+        
+        # Get the retriever from the vector store
+        knowledge_dir = os.getenv("KNOWLEDGE_DIR", "./knowledge")
+        db_dir = os.getenv("DB_DIR", "./chroma_db")
+        retriever = get_retriever(knowledge_dir, db_dir)
+        
+        if not retriever:
+            return f"Error: Couldn't initialize retriever. Please check if your knowledge base is properly set up.", model_context
+        
+        # Create a custom prompt template that includes the system context
+        template = """
+        {system_instructions}
+        
+        Use the following pieces of context to answer the question at the end.
+        If you don't know the answer, just say you don't know. Don't try to make up an answer.
+        
+        Context:
+        {context}
+        
+        Question: {question}
+        
+        Answer:
+        """
+        
+        # Create the prompt with the system context
+        prompt_template = PromptTemplate(
+            input_variables=["system_instructions", "context", "question"],
+            template=template
+        )
+        
+        # Initialize the LLM
+        llm = Ollama(model="llama3", temperature=float(st.session_state.temperature))
+        
+        # Create the QA chain
+        qa_chain = RetrievalQA.from_chain_type(
+            llm=llm,
+            chain_type="stuff",
+            retriever=retriever,
+            chain_type_kwargs={
+                "prompt": prompt_template,
+                "verbose": True
+            }
+        )
+        
+        # Get the answer
+        response = qa_chain.invoke({
+            "system_instructions": system_context,
+            "question": prompt
+        })
+        
+        # Extract the answer from the response
+        answer = response.get("result", "No answer generated")
+        
+        return answer, model_context
+        
+    except Exception as e:
+        error_message = f"Error processing your request: {str(e)}"
+        import traceback
+        traceback.print_exc()
+        return error_message, model_context
 
 
 def run():
