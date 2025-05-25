@@ -191,7 +191,7 @@ def run():
         # Get the root project directory (BraceFaceRag)
         project_root = os.path.dirname(os.path.dirname(os.path.dirname(__file__)))
         system_prompt_file = os.path.join(project_root, "system_prompt.txt")
-        
+        print(f"System prompt file: {system_prompt_file}")
         # When initializing the system context:
         if os.path.exists(system_prompt_file):
             try:
