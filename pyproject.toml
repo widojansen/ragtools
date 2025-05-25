@@ -1,6 +1,6 @@
 [project]
 name = "ragtools"
-version = "0.1.7.2"
+version = "0.1.7.3"
 description = "Tools for RAG apps"
 readme = "README.md"
 requires-python = ">=3.12"

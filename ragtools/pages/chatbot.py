@@ -197,6 +197,8 @@ def run():
             try:
                 with open(system_prompt_file, 'r') as f:
                     system_context = f.read().strip()
+                    print(f"System prompt file: {system_prompt_file}")
+                    print(f"System context: {system_context}")
                     st.session_state.system_context = system_context
                     # Also set the context_input value to match
                     st.session_state.context_input = system_context
@@ -226,7 +228,8 @@ def run():
     # Settings area
     with st.expander("⚙️ Settings", expanded=False):
         # In the settings expander section, replace the current text_area with:
-
+        print(f"System context: {st.session_state.system_context}")
+        print(f"context input: {st.session_state.context_input}")
         if "context_input" not in st.session_state and "system_context" in st.session_state:
             # Initialize context_input with system_context only if it doesn't exist yet
             st.session_state.context_input = st.session_state.system_context
