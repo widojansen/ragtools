@@ -124,6 +124,14 @@ def init_ollama_embeddings(model: str = "granite-embedding:278m", progress_callb
             return embeddings
         except Exception as e:
             logger.error(f"Error initializing embeddings (attempt {attempt + 1}): {str(e)}")
+            
+            # Check for specific error messages
+            error_str = str(e).lower()
+            if "connection refused" in error_str:
+                logger.error("Ollama server appears to be down. Please ensure it's running.")
+            elif "internal server error" in error_str:
+                logger.error("Ollama server returned an internal error. Consider restarting Ollama.")
+                
             if progress_callback:
                 progress_callback(f"Error initializing embeddings (attempt {attempt + 1}): {str(e)}")
             if attempt < max_retries - 1:
@@ -229,21 +237,38 @@ def create_or_load_vectorstore(content_directory: str, db_directory: str = _db_p
                 )
             else:
                 logging.info(f"Creating embeddings for {len(documents)} documents")
-                # Create vector store with documents
+                
+                # Create vector store with small batches
+                # Create an empty ChromaDB instance first
                 vector_store = Chroma.from_documents(
-                    documents=documents,
+                    documents=[],  # Start with empty documents
                     embedding=embed_model,
                     persist_directory=db_directory
                 )
+                
+                # Add documents in small batches
+                batch_size = 1  # Process one document at a time
+                for i in range(0, len(documents), batch_size):
+                    batch_end = min(i + batch_size, len(documents))
+                    batch = documents[i:batch_end]
+                    
+                    logging.info(f"Processing batch {i//batch_size + 1}/{(len(documents)-1)//batch_size + 1} ({len(batch)} documents)")
+                    
+                    try:
+                        # Add documents to the existing vector store
+                        vector_store.add_documents(documents=batch)
+                        
+                        # Sleep to let Ollama recover
+                        time.sleep(5.0)  # Longer pause between batches
+                    except Exception as e:
+                        logging.error(f"Error processing batch: {e}")
+                        # Continue with next batch
                 
             # Save the content hash
             with open(hash_file, "w") as f:
                 f.write(files_hash)
                 
             logging.info(f"Vector store created with {vector_store._collection.count()} embeddings")
-            
-            # Note: No need to call persist() explicitly as newer versions of Chroma handle this automatically
-            # The persist_directory parameter ensures data is saved to disk
             
             return vector_store
             
