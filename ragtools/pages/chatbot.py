@@ -188,25 +188,38 @@ def run():
 
     # Try to find system_prompt.txt at the project root level
     try:
-        # Get the root project directory (BraceFaceRag)
-        project_root = os.path.dirname(os.path.dirname(os.path.dirname(__file__)))
+        # Get the actual project root path
+        import os
+        
+        # Use a more reliable method to find the project root
+        # First, try to find the app.py file which is at the project root
+        current_dir = os.path.dirname(os.path.abspath(__file__))
+        # Navigate up to find BraceFaceRag root
+        project_root = os.path.abspath(os.path.join(current_dir, "..", "..", ".."))
+        
+        # Check if this path looks right by checking for some known files
+        if not os.path.exists(os.path.join(project_root, "app.py")):
+            # If app.py isn't found, try an alternative approach
+            project_root = os.path.abspath(os.path.join(os.path.dirname(os.path.abspath(__file__)), "..", "..", "..", "BraceFaceRag"))
+        
         system_prompt_file = os.path.join(project_root, "system_prompt.txt")
-        print(f"System prompt file: {system_prompt_file}")
-        # When initializing the system context:
+        
+        print(f"Checking for system prompt at: {system_prompt_file}")
+        print(f"File exists: {os.path.exists(system_prompt_file)}")
+        
         if os.path.exists(system_prompt_file):
             try:
                 with open(system_prompt_file, 'r') as f:
                     system_context = f.read().strip()
-                    print(f"System prompt file: {system_prompt_file}")
-                    print(f"System context: {system_context}")
                     st.session_state.system_context = system_context
-                    # Also set the context_input value to match
                     st.session_state.context_input = system_context
+                    print(f"Successfully loaded system prompt from: {system_prompt_file}")
             except Exception as e:
                 st.error(f"Error reading system prompt file: {e}")
                 st.session_state.system_context = default_system_context
                 st.session_state.context_input = default_system_context
         else:
+            print(f"System prompt file not found at: {system_prompt_file}")
             st.session_state.system_context = default_system_context
             st.session_state.context_input = default_system_context
     except Exception as e:
