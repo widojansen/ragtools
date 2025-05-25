@@ -88,61 +88,35 @@ def load_pdf_file(file_path: str) -> List[Document]:
         logger.error(f"Error loading PDF {file_path}: {e}")
         return []
 
-def init_ollama_embeddings(model: str = "granite-embedding:278m", progress_callback=None) -> Optional[Any]:
-    """
-    Initialize Ollama embeddings with robust error handling
-    
-    Args:
-        model: Name of the embeddings model to use (defaults to granite-embedding:278m)
-        progress_callback: Optional callback for progress updates
-        
-    Returns:
-        Embeddings object or None if failed
-    """
+def init_ollama_embeddings(model: str = "all-minilm-l6-v2", progress_callback=None) -> Optional[Any]:
+    """Initialize embeddings with robust error handling"""
     if not LANGCHAIN_AVAILABLE:
-        if progress_callback:
-            progress_callback("LangChain not available. Please install required packages.")
+        logger.error("LangChain not available. Please install required packages.")
         return None
         
-    max_retries = 3
-    retry_delay = 2
-
-    for attempt in range(max_retries):
-        try:
-            if progress_callback:
-                progress_callback(f"Initializing embeddings model (attempt {attempt + 1}/{max_retries})...")
-            embeddings = OllamaEmbeddings(model=model)
-
-            # Test the embeddings with a sample text
-            test_text = "This is a test."
-            test_embedding = embeddings.embed_query(test_text)
-            if test_embedding and len(test_embedding) > 0:
-                if progress_callback:
-                    progress_callback(f"Successfully connected to Ollama with embeddings model {model}")
-                return embeddings
-            logger.info(f"Successfully initialized Ollama embeddings with model {model}")
+    # Try using all-minilm-l6-v2 model instead of granite-embedding
+    # This model is more reliable for embedding tasks
+    try:
+        logger.info(f"Initializing embedding model: {model}")
+        embeddings = OllamaEmbeddings(
+            model=model,
+            num_threads=1  # Reduce resource usage
+        )
+        
+        # Test the embeddings
+        test_text = "This is a test document."
+        embedding = embeddings.embed_query(test_text)
+        
+        if embedding and len(embedding) > 0:
+            logger.info(f"Successfully initialized embeddings with dimension {len(embedding)}")
             return embeddings
-        except Exception as e:
-            logger.error(f"Error initializing embeddings (attempt {attempt + 1}): {str(e)}")
+        else:
+            logger.error("Embedding model returned empty vector")
+            return None
             
-            # Check for specific error messages
-            error_str = str(e).lower()
-            if "connection refused" in error_str:
-                logger.error("Ollama server appears to be down. Please ensure it's running.")
-            elif "internal server error" in error_str:
-                logger.error("Ollama server returned an internal error. Consider restarting Ollama.")
-                
-            if progress_callback:
-                progress_callback(f"Error initializing embeddings (attempt {attempt + 1}): {str(e)}")
-            if attempt < max_retries - 1:
-                logger.info(f"Waiting {retry_delay} seconds before retrying...")
-                if progress_callback:
-                    progress_callback(f"Waiting {retry_delay} seconds before retrying...")
-                time.sleep(retry_delay)
-                retry_delay *= 2  # Exponential backoff
-
-    logger.error("Failed to initialize Ollama embeddings after multiple attempts")
-    return None
+    except Exception as e:
+        logger.error(f"Error initializing embeddings: {str(e)}")
+        return None
 
 def create_or_load_vectorstore(content_directory: str, db_directory: str = _db_path, force_reload: bool = False):
     """
