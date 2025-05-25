@@ -25,6 +25,7 @@ def load_context():
     ensure_logs_folder_exists()
     if os.path.exists(CONTEXT_FILE):
         with open(CONTEXT_FILE, 'r') as f:
+            print(f'Loading context from {CONTEXT_FILE}')
             return json.load(f)
     return None
 
@@ -184,27 +185,33 @@ def run():
 
     # Check if system_prompt.txt exists in project root and load it
     default_system_context = "You are a helpful RAG assistant. Answer questions based on the provided knowledge base."
-    
+
     # Try to find system_prompt.txt at the project root level
     try:
         # Get the root project directory (BraceFaceRag)
         project_root = os.path.dirname(os.path.dirname(os.path.dirname(__file__)))
         system_prompt_file = os.path.join(project_root, "system_prompt.txt")
         
-        if "system_context" not in st.session_state:
-            if os.path.exists(system_prompt_file):
-                try:
-                    with open(system_prompt_file, 'r') as f:
-                        st.session_state.system_context = f.read().strip()
-                except Exception as e:
-                    st.error(f"Error reading system prompt file: {e}")
-                    st.session_state.system_context = default_system_context
-            else:
+        # When initializing the system context:
+        if os.path.exists(system_prompt_file):
+            try:
+                with open(system_prompt_file, 'r') as f:
+                    system_context = f.read().strip()
+                    st.session_state.system_context = system_context
+                    # Also set the context_input value to match
+                    st.session_state.context_input = system_context
+            except Exception as e:
+                st.error(f"Error reading system prompt file: {e}")
                 st.session_state.system_context = default_system_context
+                st.session_state.context_input = default_system_context
+        else:
+            st.session_state.system_context = default_system_context
+            st.session_state.context_input = default_system_context
     except Exception as e:
         st.error(f"Error setting up system context: {e}")
         if "system_context" not in st.session_state:
             st.session_state.system_context = default_system_context
+            st.session_state.context_input = default_system_context
 
     if "temperature" not in st.session_state:
         st.session_state.temperature = 0.7
@@ -212,20 +219,21 @@ def run():
     if "input_counter" not in st.session_state:
         st.session_state.input_counter = 0
 
+    # Define a callback function to keep values in sync
+    def sync_context():
+        st.session_state.system_context = st.session_state.context_input
+
     # Settings area
     with st.expander("⚙️ Settings", expanded=False):
         # System Context
         st.text_area(
             "System Context:",
-            value=st.session_state.system_context,
+            value=st.session_state.context_input,  # Use context_input instead of system_context
             height=100,
             key="context_input",
+            on_change=sync_context,  # Add this callback
             help="Instructions for the AI that apply to all messages."
         )
-
-        if st.button("Update Context"):
-            st.session_state.system_context = st.session_state.context_input
-            st.rerun()
 
         # Temperature Control
         st.slider(
