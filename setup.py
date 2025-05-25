@@ -13,7 +13,8 @@ setup(
         "chromadb",
         "langchain-chroma",
         "langchain-huggingface",
-        "pypdf"
+        "pypdf",
+        "sentence-transformers",
     ],
     author="Wido Jansen",
     author_email="widojansen@gmail.com",
