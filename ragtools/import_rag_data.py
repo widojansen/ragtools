@@ -19,13 +19,9 @@ try:
 except ImportError:
     LANGCHAIN_AVAILABLE = False
 
-# Updated imports to use the recommended packages
+# Updated imports - remove HuggingFaceEmbeddings
 from langchain_community.document_loaders import PyPDFLoader
-from langchain.text_splitter import RecursiveCharacterTextSplitter
 from langchain.schema import Document
-from langchain_chroma import Chroma  # Updated import
-from langchain_huggingface import HuggingFaceEmbeddings  # Updated import
-from langchain_community.llms.ollama import Ollama
 
 # Configure logging
 logging.basicConfig(level=logging.INFO, format='%(message)s')
@@ -92,6 +88,54 @@ def load_pdf_file(file_path: str) -> List[Document]:
         logger.error(f"Error loading PDF {file_path}: {e}")
         return []
 
+def init_ollama_embeddings(model: str = "granite-embedding:278m", progress_callback=None) -> Optional[Any]:
+    """
+    Initialize Ollama embeddings with robust error handling
+    
+    Args:
+        model: Name of the embeddings model to use (defaults to granite-embedding:278m)
+        progress_callback: Optional callback for progress updates
+        
+    Returns:
+        Embeddings object or None if failed
+    """
+    if not LANGCHAIN_AVAILABLE:
+        if progress_callback:
+            progress_callback("LangChain not available. Please install required packages.")
+        return None
+        
+    max_retries = 3
+    retry_delay = 2
+
+    for attempt in range(max_retries):
+        try:
+            if progress_callback:
+                progress_callback(f"Initializing embeddings model (attempt {attempt + 1}/{max_retries})...")
+            embeddings = OllamaEmbeddings(model=model)
+
+            # Test the embeddings with a sample text
+            test_text = "This is a test."
+            test_embedding = embeddings.embed_query(test_text)
+            if test_embedding and len(test_embedding) > 0:
+                if progress_callback:
+                    progress_callback(f"Successfully connected to Ollama with embeddings model {model}")
+                return embeddings
+            logger.info(f"Successfully initialized Ollama embeddings with model {model}")
+            return embeddings
+        except Exception as e:
+            logger.error(f"Error initializing embeddings (attempt {attempt + 1}): {str(e)}")
+            if progress_callback:
+                progress_callback(f"Error initializing embeddings (attempt {attempt + 1}): {str(e)}")
+            if attempt < max_retries - 1:
+                logger.info(f"Waiting {retry_delay} seconds before retrying...")
+                if progress_callback:
+                    progress_callback(f"Waiting {retry_delay} seconds before retrying...")
+                time.sleep(retry_delay)
+                retry_delay *= 2  # Exponential backoff
+
+    logger.error("Failed to initialize Ollama embeddings after multiple attempts")
+    return None
+
 def create_or_load_vectorstore(content_directory: str, db_directory: str = _db_path, force_reload: bool = False):
     """
     Create or load a vector store with document embeddings from the content directory.
@@ -109,7 +153,6 @@ def create_or_load_vectorstore(content_directory: str, db_directory: str = _db_p
         import hashlib
         import logging
         from langchain_community.vectorstores import Chroma
-        from langchain_community.embeddings import HuggingFaceEmbeddings
         
         # Check if content directory exists
         if not os.path.exists(content_directory):
@@ -133,12 +176,10 @@ def create_or_load_vectorstore(content_directory: str, db_directory: str = _db_p
         else:
             needs_reload = True
             
-        # Initialize embeddings model
-        embed_model = HuggingFaceEmbeddings(
-            model_name="BAAI/bge-small-en-v1.5",
-            model_kwargs={'device': 'cpu'},
-            encode_kwargs={'normalize_embeddings': True}
-        )
+        # Initialize embeddings model - now using Ollama
+        embed_model = init_ollama_embeddings(model="granite-embedding:278m")
+        if not embed_model:
+            raise ValueError("Failed to initialize Ollama embeddings. Is Ollama running?")
         
         # Load existing vector store if it exists and we don't need to reload
         if not needs_reload and os.path.exists(db_directory):
@@ -226,48 +267,6 @@ def import_rag_data(content_directory: str, db_directory: str = _db_path, force_
     """
     return create_or_load_vectorstore(content_directory, db_directory, force_reload)
 
-def init_ollama_embeddings(model: str = "granite-embedding:278m", progress_callback=None) -> Optional[Any]:
-    """
-    Initialize Ollama embeddings with robust error handling
-    
-    Args:
-        model: Name of the embeddings model to use (defaults to granite-embedding:278m)
-        progress_callback: Optional callback for progress updates
-        
-    Returns:
-        Embeddings object or None if failed
-    """
-    if not LANGCHAIN_AVAILABLE:
-        if progress_callback:
-            progress_callback("LangChain not available. Please install required packages.")
-        return None
-        
-    max_retries = 3
-    retry_delay = 2
-
-    for attempt in range(max_retries):
-        try:
-            if progress_callback:
-                progress_callback(f"Initializing embeddings model (attempt {attempt + 1}/{max_retries})...")
-            embeddings = OllamaEmbeddings(model=model)
-
-            # Test the embeddings with a sample text
-            test_text = "This is a test."
-            test_embedding = embeddings.embed_query(test_text)
-            if test_embedding and len(test_embedding) > 0:
-                if progress_callback:
-                    progress_callback(f"Successfully connected to Ollama with embeddings model {model}")
-                return embeddings
-        except Exception as e:
-            if progress_callback:
-                progress_callback(f"Error initializing embeddings (attempt {attempt + 1}): {str(e)}")
-            if attempt < max_retries - 1:
-                if progress_callback:
-                    progress_callback(f"Waiting {retry_delay} seconds before retrying...")
-                time.sleep(retry_delay)
-                retry_delay *= 2  # Exponential backoff
-
-    return None
 # Direct script execution
 if __name__ == "__main__":
     import argparse

@@ -1,6 +1,6 @@
 [project]
 name = "ragtools"
-version = "0.1.6.2"
+version = "0.1.6.3"
 description = "Tools for RAG apps"
 readme = "README.md"
 requires-python = ">=3.12"
@@ -12,7 +12,5 @@ dependencies = [
     "langchain-ollama",
     "chromadb",
     "langchain-chroma",
-    "langchain-huggingface",
     "pypdf",
-    "sentence-transformers",
 ]
