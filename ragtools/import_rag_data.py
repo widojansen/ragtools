@@ -184,10 +184,18 @@ def create_or_load_vectorstore(content_directory: str, db_directory: str = _db_p
         else:
             needs_reload = True
             
-        # Initialize embeddings model - now using Ollama
+        # Initialize embeddings model
         embed_model = init_ollama_embeddings(model="granite-embedding:278m")
         if not embed_model:
             raise ValueError("Failed to initialize Ollama embeddings. Is Ollama running?")
+        
+        # Test the embedding model
+        test_text = "This is a test document."
+        test_embedding = embed_model.embed_query(test_text)
+        if not test_embedding or len(test_embedding) == 0:
+            raise ValueError("Embedding model returned empty embeddings. Please check Ollama configuration.")
+        
+        logging.info(f"Embedding model test successful. Vector dimension: {len(test_embedding)}")
         
         # Load existing vector store if it exists and we don't need to reload
         if not needs_reload and os.path.exists(db_directory):
@@ -237,6 +245,17 @@ def create_or_load_vectorstore(content_directory: str, db_directory: str = _db_p
                 )
             else:
                 logging.info(f"Creating embeddings for {len(documents)} documents")
+                
+                # Verify documents have content before embedding
+                valid_documents = []
+                for doc in documents:
+                    if doc.page_content and len(doc.page_content.strip()) > 0:
+                        valid_documents.append(doc)
+                    else:
+                        logging.warning(f"Skipping document with empty content: {doc.metadata.get('source', 'unknown')}")
+                
+                documents = valid_documents
+                logging.info(f"Found {len(documents)} valid documents with content")
                 
                 # Create vector store with small batches
                 # Create an empty ChromaDB instance first
