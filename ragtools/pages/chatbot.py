@@ -225,15 +225,24 @@ def run():
 
     # Settings area
     with st.expander("⚙️ Settings", expanded=False):
-        # System Context
-        st.text_area(
+        # In the settings expander section, replace the current text_area with:
+
+        if "context_input" not in st.session_state and "system_context" in st.session_state:
+            # Initialize context_input with system_context only if it doesn't exist yet
+            st.session_state.context_input = st.session_state.system_context
+
+        # Then use the text area without setting a value parameter
+        context_input = st.text_area(
             "System Context:",
-            value=st.session_state.context_input,  # Use context_input instead of system_context
-            height=100,
             key="context_input",
-            on_change=sync_context,  # Add this callback
+            height=100,
             help="Instructions for the AI that apply to all messages."
         )
+
+        # Then use the Update Context button to sync values
+        if st.button("Update Context"):
+            st.session_state.system_context = st.session_state.context_input
+            st.rerun()
 
         # Temperature Control
         st.slider(
