@@ -22,15 +22,6 @@ class RagStreamlitUI:
     ):
         """
         Initialize the Streamlit UI for RAG applications
-        
-        Args:
-            project_name: Name of the project
-            page_title: Title displayed on the page
-            page_icon: Icon for the page
-            input_field_label: Label for the input field
-            input_field_default: Default text for the input field
-            input_field_placeholder: Placeholder text for the input field
-            input_field_help: Help text for the input field
         """
         self.project_name = project_name
         self.page_title = page_title
@@ -40,13 +31,7 @@ class RagStreamlitUI:
         self.input_field_placeholder = input_field_placeholder
         self.input_field_help = input_field_help
         
-        # Configure page settings
-        st.set_page_config(
-            page_title=self.page_title,
-            page_icon=self.page_icon,
-            layout="wide",
-            initial_sidebar_state="expanded"
-        )
+        # Remove the st.set_page_config call from here
         
         # Initialize session state
         self._initialize_session_state()
