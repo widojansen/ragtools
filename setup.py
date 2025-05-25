@@ -2,7 +2,7 @@ from setuptools import setup, find_packages
 
 setup(
     name="ragtools",
-    version="0.1.6.",
+    version="0.1.6.3",
     packages=find_packages(),  # This is crucial for proper package discovery
     install_requires=[
         "streamlit",
@@ -12,7 +12,6 @@ setup(
         "langchain-ollama",
         "chromadb",
         "langchain-chroma",
-        "langchain-huggingface",
         "pypdf",
     ],
     author="Wido Jansen",
