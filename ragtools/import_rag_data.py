@@ -104,17 +104,17 @@ def list_available_ollama_models():
         logger.error(f"Error listing Ollama models: {e}")
         return []
 
-def init_ollama_embeddings(model: str = "nomic-embed-text", progress_callback=None) -> Optional[Any]:
+def init_ollama_embeddings(model: str = "granite-embedding:278m", progress_callback=None) -> Optional[Any]:
     """Initialize embeddings with robust error handling"""
     if not LANGCHAIN_AVAILABLE:
         logger.error("LangChain not available. Please install required packages.")
         return None
     
     # List of currently available embedding models (as of May 2025)
-    current_embedding_models = ["nomic-embed-text", "mxbai-embed-large", "llama3"]
+    current_embedding_models = ["granite-embedding:278m", "nomic-embed-text", "mxbai-embed-large", "llama3"]
     
     # List available models for troubleshooting
-    list_available_ollama_models()
+    #list_available_ollama_models()
     
     # Check if model exists in Ollama
     if not check_ollama_model(model):
@@ -199,7 +199,8 @@ def create_or_load_vectorstore(content_directory: str, db_directory: str = _db_p
             needs_reload = True
             
         # Initialize embeddings model
-        embed_model = init_ollama_embeddings(model="nomic-embed-text")
+        # default from Claude Sonnet 3.7 was nomic-embed-text
+        embed_model = init_ollama_embeddings(model="granite-embedding:278m")
         if not embed_model:
             raise ValueError("Failed to initialize Ollama embeddings. Is Ollama running?")
         
@@ -245,7 +246,10 @@ def create_or_load_vectorstore(content_directory: str, db_directory: str = _db_p
                     # Add support for other file types as needed
                     # elif file_ext == '.docx':
                     #     # Process DOCX files
-                    
+
+            print(f"documents: {documents}")
+            print(f"Will create new vector store with {len(documents)} documents")
+
             if not documents:
                 logging.warning(f"No documents found in {content_directory}")
                 # Create an empty vector store
@@ -299,7 +303,7 @@ def create_simple_vectorstore(content_directory: str, db_directory: str = _db_pa
 
     try:
         # Initialize embeddings
-        embed_model = init_ollama_embeddings(model="nomic-embed-text")
+        embed_model = init_ollama_embeddings(model="granite-embedding:278m")
         if not embed_model:
             raise ValueError("Failed to initialize embeddings")
             
