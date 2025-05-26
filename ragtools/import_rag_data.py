@@ -240,14 +240,25 @@ def create_or_load_vectorstore(content_directory: str, db_directory: str = _db_p
                         try:
                             pdf_docs = load_pdf_file(file_path)
                             documents.extend(pdf_docs)
+                            print(f"Loaded pdf file: {file_path}")
                         except Exception as e:
                             logging.error(f"Error processing PDF file {file_path}: {str(e)}")
                     
                     # Add support for other file types as needed
-                    # elif file_ext == '.docx':
-                    #     # Process DOCX files
+                    elif file_ext == '.txt':
+                        try:
+                            loader = TextLoader(file_path)
+                            docs = loader.load()
 
-            print(f"documents: {documents}")
+                            # Apply metadata to each document
+                            # for doc in docs:
+                            #     doc.metadata.update(metadata)
+
+                            documents.extend(docs)
+                            print(f"Loaded text file: {file_path}")
+                        except Exception as e:
+                            logging.error(f"Error processing text file {file_path}: {str(e)}")
+
             print(f"Will create new vector store with {len(documents)} documents")
 
             if not documents:
