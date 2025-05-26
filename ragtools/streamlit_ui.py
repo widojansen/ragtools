@@ -18,7 +18,10 @@ class RagStreamlitUI:
         input_field_label: str = "Enter your query",
         input_field_default: str = "",
         input_field_placeholder: str = "Ask me anything...",
-        input_field_help: str = "Type your question here and press Enter"
+        input_field_help: str = "Type your question here and press Enter",
+        project_dir = "",
+        db_dir = "",
+        knowledge_dir = ""
     ):
         """
         Initialize the Streamlit UI for RAG applications
@@ -134,6 +137,26 @@ def launch_streamlit_ui(config: Optional[Dict[str, Any]] = None):
     # Update with provided config if any
     if config:
         ui_config.update(config)
+        print(f"Launching Streamlit UI with config: {ui_config}")
+
+    # Modify the session state to persist vectorstore reference
+    if "vectorstore" not in st.session_state:
+        try:
+            # Import and initialize vector store
+            import ragtools.import_rag_data as rag_import
+
+            # Only create/load the vector store if it doesn't exist or needs updating
+            vectorstore = rag_import.create_or_load_vectorstore(
+                content_directory=config["knowledge_dir"],
+                db_directory=config["db_dir"],
+                force_reload=False
+            )
+
+            # Store in session state
+            st.session_state.vectorstore = vectorstore
+        except Exception as e:
+            st.error(f"Error initializing vector store: {str(e)}")
+            st.session_state.vectorstore = None
     
     # Create and run the UI
     ui = RagStreamlitUI(**ui_config)

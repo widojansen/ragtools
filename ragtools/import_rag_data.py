@@ -172,6 +172,9 @@ def create_or_load_vectorstore(content_directory: str, db_directory: str = _db_p
     Returns:
         A vector store object
     """
+
+    print(f"Creating or loading vectorstore: {db_directory}")
+
     try:
         # Check if content directory exists
         if not os.path.exists(content_directory):
@@ -292,6 +295,8 @@ def create_simple_vectorstore(content_directory: str, db_directory: str = _db_pa
     """
     Create a simple vector store without complex batching or error handling.
     """
+    print(f"Create simple vector store with {db_directory}")
+
     try:
         # Initialize embeddings
         embed_model = init_ollama_embeddings(model="nomic-embed-text")
