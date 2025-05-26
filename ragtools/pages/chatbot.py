@@ -7,7 +7,7 @@ import os
 from datetime import datetime
 
 # Constants
-MODEL = 'llama3.1'  # Default model
+MODEL = 'qwen3:8b'  # Default model
 LOGS_FOLDER = 'chat_logs'
 LOG_FILE = os.path.join(LOGS_FOLDER, 'chat_log.txt')
 CONTEXT_FILE = os.path.join(LOGS_FOLDER, 'context.json')
@@ -53,7 +53,7 @@ def ask_llm(prompt, system_context="", model_context=None):
     try:
         from ragtools.import_rag_data import get_retriever
         from langchain_community.llms import Ollama
-        from langchain.chains import RetrievalQA
+        from langchain.chains import LLMChain
         from langchain.prompts import PromptTemplate
         
         # Get the retriever from the vector store
@@ -86,27 +86,28 @@ def ask_llm(prompt, system_context="", model_context=None):
         )
         
         # Initialize the LLM
-        llm = Ollama(model="llama3", temperature=float(st.session_state.temperature))
+        llm = Ollama(model=MODEL, temperature=float(st.session_state.temperature))
         
-        # Create the QA chain
-        qa_chain = RetrievalQA.from_chain_type(
+        # Create a basic LLMChain
+        llm_chain = LLMChain(
             llm=llm,
-            chain_type="stuff",
-            retriever=retriever,
-            chain_type_kwargs={
-                "prompt": prompt_template,
-                "verbose": True
-            }
+            prompt=prompt_template,
+            verbose=True
         )
         
-        # Get the answer
-        response = qa_chain.invoke({
+        # Get relevant documents first
+        docs = retriever.get_relevant_documents(prompt)
+        context_text = "\n\n".join(doc.page_content for doc in docs)
+        
+        # Pass all required variables directly to the LLMChain
+        response = llm_chain.invoke({
             "system_instructions": system_context,
+            "context": context_text,
             "question": prompt
         })
         
         # Extract the answer from the response
-        answer = response.get("result", "No answer generated")
+        answer = response.get("text", "No answer generated")
         
         return answer, model_context
         
@@ -204,8 +205,8 @@ def run():
         
         system_prompt_file = os.path.join(project_root, "system_prompt.txt")
         
-        print(f"Checking for system prompt at: {system_prompt_file}")
-        print(f"File exists: {os.path.exists(system_prompt_file)}")
+        # print(f"Checking for system prompt at: {system_prompt_file}")
+        # print(f"File exists: {os.path.exists(system_prompt_file)}")
         
         if os.path.exists(system_prompt_file):
             try:
@@ -213,7 +214,7 @@ def run():
                     system_context = f.read().strip()
                     st.session_state.system_context = system_context
                     st.session_state.context_input = system_context
-                    print(f"Successfully loaded system prompt from: {system_prompt_file}")
+                    # print(f"Successfully loaded system prompt from: {system_prompt_file}")
             except Exception as e:
                 st.error(f"Error reading system prompt file: {e}")
                 st.session_state.system_context = default_system_context
@@ -241,8 +242,8 @@ def run():
     # Settings area
     with st.expander("⚙️ Settings", expanded=False):
         # In the settings expander section, replace the current text_area with:
-        print(f"System context: {st.session_state.system_context}")
-        print(f"context input: {st.session_state.context_input}")
+        #print(f"System context: {st.session_state.system_context}")
+        #print(f"context input: {st.session_state.context_input}")
         if "context_input" not in st.session_state and "system_context" in st.session_state:
             # Initialize context_input with system_context only if it doesn't exist yet
             st.session_state.context_input = st.session_state.system_context
