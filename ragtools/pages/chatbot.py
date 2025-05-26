@@ -7,7 +7,6 @@ import os
 from datetime import datetime
 
 # Constants
-MODEL = 'qwen3:8b'  # Default model
 LOGS_FOLDER = 'chat_logs'
 LOG_FILE = os.path.join(LOGS_FOLDER, 'chat_log.txt')
 CONTEXT_FILE = os.path.join(LOGS_FOLDER, 'context.json')
@@ -21,7 +20,7 @@ def ensure_logs_folder_exists():
 
 
 def load_context():
-    """Load conversation context from file if it exists."""
+    """Load conversation context from the file if it exists."""
     ensure_logs_folder_exists()
     if os.path.exists(CONTEXT_FILE):
         with open(CONTEXT_FILE, 'r') as f:
@@ -50,15 +49,18 @@ def ask_llm(prompt, system_context="", model_context=None):
     """
     Send a prompt to the language model with retrieved context from the vector store
     """
+    print(f"Prompt: \n{prompt}\n\n")
+    print(f"model_context: \n{model_context}\n\n")
+
     try:
         from ragtools.import_rag_data import get_retriever
         from langchain_community.llms import Ollama
-        from langchain.chains import LLMChain
+        from langchain.chains.llm import LLMChain
         from langchain.prompts import PromptTemplate
         
         # Get the retriever from the vector store
-        knowledge_dir = os.getenv("KNOWLEDGE_DIR", "./knowledge")
-        db_dir = os.getenv("DB_DIR", "./chroma_db")
+        knowledge_dir = st.session_state.knowledge_dir
+        db_dir = st.session_state.db_dir
         retriever = get_retriever(knowledge_dir, db_dir)
         
         if not retriever:
@@ -84,9 +86,11 @@ def ask_llm(prompt, system_context="", model_context=None):
             input_variables=["system_instructions", "context", "question"],
             template=template
         )
+
+        print(f"prompt_template: \n{prompt_template}\n\n")
         
         # Initialize the LLM
-        llm = Ollama(model=MODEL, temperature=float(st.session_state.temperature))
+        llm = Ollama(model=st.session_state.llm, temperature=float(st.session_state.temperature))
         
         # Create a basic LLMChain
         llm_chain = LLMChain(
@@ -97,6 +101,7 @@ def ask_llm(prompt, system_context="", model_context=None):
         
         # Get relevant documents first
         docs = retriever.get_relevant_documents(prompt)
+        print(f"docs: \n{docs}\n\n")
         context_text = "\n\n".join(doc.page_content for doc in docs)
         
         # Pass all required variables directly to the LLMChain
@@ -105,10 +110,10 @@ def ask_llm(prompt, system_context="", model_context=None):
             "context": context_text,
             "question": prompt
         })
-        
+        print(f"response: \n{response}\n\n")
         # Extract the answer from the response
         answer = response.get("text", "No answer generated")
-        
+        print(f"answer: \n{answer}\n\n")
         return answer, model_context
         
     except Exception as e:
@@ -184,7 +189,7 @@ def run():
     if "messages" not in st.session_state:
         st.session_state.messages = []
 
-    # Check if system_prompt.txt exists in project root and load it
+    # Check if system_prompt.txt exists in the project root and load it
     default_system_context = "You are a helpful RAG assistant. Answer questions based on the provided knowledge base."
 
     # Try to find system_prompt.txt at the project root level
@@ -205,7 +210,7 @@ def run():
         
         system_prompt_file = os.path.join(project_root, "system_prompt.txt")
         
-        # print(f"Checking for system prompt at: {system_prompt_file}")
+        print(f"Checking for system prompt at: {system_prompt_file}")
         # print(f"File exists: {os.path.exists(system_prompt_file)}")
         
         if os.path.exists(system_prompt_file):
@@ -235,10 +240,6 @@ def run():
     if "input_counter" not in st.session_state:
         st.session_state.input_counter = 0
 
-    # Define a callback function to keep values in sync
-    def sync_context():
-        st.session_state.system_context = st.session_state.context_input
-
     # Settings area
     with st.expander("⚙️ Settings", expanded=False):
         # In the settings expander section, replace the current text_area with:
@@ -258,6 +259,7 @@ def run():
 
         # Then use the Update Context button to sync values
         if st.button("Update Context"):
+            st.session_state.context_input = context_input
             st.session_state.system_context = st.session_state.context_input
             st.rerun()
 
@@ -278,7 +280,7 @@ def run():
         user_input = st.session_state[input_key].strip()
 
         if user_input:
-            # Add user message to history
+            # Add the user message to the history
             st.session_state.messages.append({"role": "You", "content": user_input})
 
             # Get the bot response

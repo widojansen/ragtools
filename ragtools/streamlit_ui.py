@@ -1,9 +1,8 @@
 """
 Streamlit UI module for RAG applications
 """
-import os
 import streamlit as st
-from typing import Optional, Dict, Any, List, Callable
+from typing import Optional, Dict, Any
 
 
 class RagStreamlitUI:
@@ -19,9 +18,11 @@ class RagStreamlitUI:
         input_field_default: str = "",
         input_field_placeholder: str = "Ask me anything...",
         input_field_help: str = "Type your question here and press Enter",
-        project_dir = "",
-        db_dir = "",
-        knowledge_dir = ""
+        project_dir: str ="",
+        db_dir: str = "",
+        knowledge_dir: str = "",
+        llm: str = "",
+        embeddings: str = ""
     ):
         """
         Initialize the Streamlit UI for RAG applications
@@ -33,6 +34,12 @@ class RagStreamlitUI:
         self.input_field_default = input_field_default
         self.input_field_placeholder = input_field_placeholder
         self.input_field_help = input_field_help
+        self.project_dir = project_dir
+        self.db_dir = db_dir
+        self.knowledge_dir = knowledge_dir
+        self.llm = llm
+        self.embeddings = embeddings
+
         
         # Remove the st.set_page_config call from here
         
@@ -45,6 +52,17 @@ class RagStreamlitUI:
             st.session_state.initialized = True
             st.session_state.sidebar_state = "expanded"
             st.session_state.current_page = "chatbot"
+        
+            # Store UI configuration in the session state
+            st.session_state.input_field_label = self.input_field_label
+            st.session_state.input_field_default = self.input_field_default
+            st.session_state.input_field_placeholder = self.input_field_placeholder
+            st.session_state.input_field_help = self.input_field_help
+            st.session_state.project_dir = self.project_dir
+            st.session_state.db_dir = self.db_dir
+            st.session_state.knowledge_dir = self.knowledge_dir
+            st.session_state.llm = self.llm
+            st.session_state.embeddings = self.embeddings
 
     def run(self):
         """Run the Streamlit UI application"""
@@ -80,7 +98,8 @@ class RagStreamlitUI:
         # elif st.session_state.current_page == "dashboard":
         #     self._display_dashboard_page()
     
-    def _display_chatbot_page(self):
+    @staticmethod
+    def _display_chatbot_page():
         """Display the Chatbot page"""
         try:
             # Import the chatbot module from the pages directory
@@ -94,7 +113,8 @@ class RagStreamlitUI:
         except Exception as e:
             st.error(f"Error displaying chatbot: {str(e)}")
 
-    def _display_import_data_page(self):
+    @staticmethod
+    def _display_import_data_page():
         """Display the Import Data page"""
         try:
             # Import the import_data module from the pages directory
@@ -134,32 +154,37 @@ def launch_streamlit_ui(config: Optional[Dict[str, Any]] = None):
         "input_field_help": "Type your question here and press Enter"
     }
     
-    # Update with provided config if any
+    # Update with the provided config if any
     if config:
         ui_config.update(config)
         print(f"Launching Streamlit UI with config: {ui_config}")
 
+    # Create the UI
+    ui = RagStreamlitUI(**ui_config)
+
     # Modify the session state to persist vectorstore reference
     if "vectorstore" not in st.session_state:
+        print("vectorstore not found in session state")
+
         try:
             # Import and initialize vector store
             import ragtools.import_rag_data as rag_import
 
             # Only create/load the vector store if it doesn't exist or needs updating
             vectorstore = rag_import.create_or_load_vectorstore(
-                content_directory=config["knowledge_dir"],
-                db_directory=config["db_dir"],
+                embeddings=st.session_state.embeddings,
+                content_directory=st.session_state.knowledge_dir,
+                db_directory=st.session_state.db_dir,
                 force_reload=False
             )
-
-            # Store in session state
+            print("Vectorstore loaded")
+            # Store in the session state
             st.session_state.vectorstore = vectorstore
         except Exception as e:
             st.error(f"Error initializing vector store: {str(e)}")
             st.session_state.vectorstore = None
     
-    # Create and run the UI
-    ui = RagStreamlitUI(**ui_config)
+    # Run the UI
     ui.run()
 
 
