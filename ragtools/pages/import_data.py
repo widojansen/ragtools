@@ -8,7 +8,7 @@ import shutil
 import tempfile
 import streamlit as st
 from datetime import datetime
-from typing import List, Dict, Any, Optional, Tuple
+from typing import Dict, Any, Optional, Tuple
 import subprocess
 
 # Import necessary LangChain components if available
@@ -50,7 +50,7 @@ def create_file_metadata(file_path: str, filename: str) -> Dict[str, str]:
     # Extract a title from the filename (remove extension and replace underscores)
     title = os.path.splitext(filename)[0].replace('_', ' ').title()
 
-    # Determine file type
+    # Determine the file type
     file_extension = os.path.splitext(filename)[1].lower()
 
     # Create metadata dictionary
@@ -84,7 +84,7 @@ def init_ollama_embeddings(model: str, progress_callback=None) -> Optional[Any]:
     Initialize Ollama embeddings with robust error handling
     
     Args:
-        model: Name of the embeddings model to use
+        model: Name of the embedding model to use
         progress_callback: Optional callback for progress updates
         
     Returns:
@@ -154,7 +154,7 @@ def process_documents(
     temp_dir = tempfile.mkdtemp()
     
     try:
-        # Save uploaded files to temporary directory
+        # Save uploaded files to the temporary directory
         for uploaded_file in files:
             file_path = os.path.join(temp_dir, uploaded_file.name)
             with open(file_path, "wb") as f:
@@ -163,7 +163,7 @@ def process_documents(
             # Create metadata for this file
             metadata = create_file_metadata(file_path, uploaded_file.name)
             
-            # Process based on file type
+            # Process based on the file type
             if uploaded_file.name.endswith(".txt"):
                 try:
                     loader = TextLoader(file_path)
@@ -221,21 +221,47 @@ def process_documents(
                 progress_callback("Failed to initialize embeddings. Please check Ollama is running.")
             return None
             
-        # Create vector store
+        # Create the vector store
         ensure_directory(db_path)
-        
-        # If the database already exists, remove it to start fresh
+
+        # Connect to the existing database if it exists or create a new one
         if os.path.exists(db_path):
             if progress_callback:
-                progress_callback(f"Removing existing database at {db_path}")
-            shutil.rmtree(db_path)
-            time.sleep(1)  # Give OS time to complete deletion
-            
-        # Create a new ChromaDB client
-        client = chromadb.PersistentClient(path=db_path)
-        
-        # Create a collection
-        collection = client.create_collection("document_chunks")
+                progress_callback(f"Connecting to existing database at {db_path}")
+            try:
+                # Connect to existing ChromaDB client
+                client = chromadb.PersistentClient(path=db_path)
+                # Check if the collection exists
+                try:
+                    collection = client.get_collection(st.session_state.collection_name
+)
+                    if progress_callback:
+                        progress_callback(f"Connected to existing collection with {collection.count()} documents")
+                except Exception:
+                    # Collection doesn't exist
+                    if progress_callback:
+                        progress_callback("Creating new collection 'document_chunks'")
+                    collection = client.create_collection(st.session_state.collection_name
+)
+            except Exception as e:
+                if progress_callback:
+                    progress_callback(f"Error connecting to existing database: {str(e)}")
+                if progress_callback:
+                    progress_callback("Creating a new database")
+                # If there was an error, start fresh
+                shutil.rmtree(db_path)
+                time.sleep(1)  # Give OS time to complete deletion
+                client = chromadb.PersistentClient(path=db_path)
+                collection = client.create_collection(st.session_state.collection_name
+)
+        else:
+            if progress_callback:
+                progress_callback(f"Creating new database at {db_path}")
+            # Create a new ChromaDB client
+            client = chromadb.PersistentClient(path=db_path)
+            # Create a collection
+            collection = client.create_collection(st.session_state.collection_name
+)
         
         # Process in small batches
         batch_size = 5
@@ -253,7 +279,7 @@ def process_documents(
                 ids = [f"doc_{i + j}" for j in range(len(batch))]
                 texts = [doc.page_content for doc in batch]
                 
-                # Convert metadata to format compatible with ChromaDB
+                # Convert metadata to the format compatible with ChromaDB
                 metadatas = []
                 for doc in batch:
                     # ChromaDB requires metadata to be simple types
@@ -266,7 +292,7 @@ def process_documents(
                 try:
                     embs = embeddings.embed_documents(texts)
                     
-                    # Add to collection
+                    # Add to the collection
                     collection.add(
                         ids=ids,
                         embeddings=embs,
@@ -314,7 +340,8 @@ def process_documents(
         # Create Langchain wrapper over the ChromaDB collection
         vectorstore = Chroma(
             client=client,
-            collection_name="document_chunks",
+            collection_name=st.session_state.collection_name
+,
             embedding_function=embeddings
         )
         
@@ -332,27 +359,193 @@ def process_documents(
         shutil.rmtree(temp_dir)
 
 
+def list_documents_in_vectorstore(db_path: str, progress_callback=None) -> list:
+    """
+    List all documents stored in the Chroma vector store by examining the database directly.
+    
+    Args:
+        db_path: Directory where the vector database is stored
+        progress_callback: Optional callback for progress updates
+        
+    Returns:
+        A list of document metadata
+    """
+
+    try:
+        if not os.path.exists(db_path):
+            if progress_callback:
+                progress_callback(f"Vector store directory does not exist: {db_path}")
+            return []
+        
+        # Check if SQLite database exists
+        sqlite_db = os.path.join(db_path, "chroma.sqlite3")
+        if not os.path.exists(sqlite_db):
+            if progress_callback:
+                progress_callback(f"SQLite database not found at {sqlite_db}")
+            return []
+        
+        # Try direct SQLite access to get metadata
+        import sqlite3
+        
+        if progress_callback:
+            progress_callback("Accessing Chroma SQLite database directly...")
+            print(f"Accessing Chroma SQLite database directly...")
+
+        try:
+            # Connect to the SQLite database
+            conn = sqlite3.connect(sqlite_db)
+            cursor = conn.cursor()
+            
+            # Get information about tables
+            cursor.execute("SELECT name FROM sqlite_master WHERE type='table';")
+            tables = cursor.fetchall()
+            if progress_callback:
+                progress_callback(f"Found tables: {[t[0] for t in tables]}")
+            print(f"Found tables: {[t[0] for t in tables]}")
+            # Look for the embeddings or metadata table
+            metadata_list = []
+            
+            # Try to query each table that might contain metadata
+            for potential_table in ['embeddings', 'metadata', 'documents', 'document_metadata']:
+                try:
+                    # Check if this table exists
+                    cursor.execute(f"SELECT name FROM sqlite_master WHERE type='table' AND name='{potential_table}';")
+                    if not cursor.fetchone():
+                        continue
+                    
+                    # Check table schema
+                    cursor.execute(f"PRAGMA table_info({potential_table});")
+                    columns = [col[1] for col in cursor.fetchall()]
+                    if progress_callback:
+                        progress_callback(f"Table {potential_table} has columns: {columns}")
+                    
+                    # If there's a metadata column
+                    if 'metadata' in columns:
+                        cursor.execute(f"SELECT metadata FROM {potential_table};")
+                        rows = cursor.fetchall()
+                        if progress_callback:
+                            progress_callback(f"Found {len(rows)} rows with metadata in {potential_table}")
+                        
+                        import json
+                        for row in rows:
+                            try:
+                                metadata = json.loads(row[0])
+                                if metadata and isinstance(metadata, dict):
+                                    metadata_list.append(metadata)
+                            except:
+                                pass
+                except Exception as e:
+                    if progress_callback:
+                        progress_callback(f"Error querying table {potential_table}: {str(e)}")
+                    continue
+            
+            conn.close()
+            
+            # Process the metadata to extract unique documents
+            if metadata_list:
+                # Extract unique document sources from metadata
+                unique_documents = {}
+                for metadata in metadata_list:
+                    # Try different fields that might identify the document
+                    source = None
+                    for field in ['source', 'filename', 'file_path', 'path']:
+                        if field in metadata and metadata[field]:
+                            source = metadata[field]
+                            break
+                    
+                    if source and source not in unique_documents:
+                        unique_documents[source] = metadata
+                
+                if progress_callback:
+                    progress_callback(f"Found {len(unique_documents)} unique documents in database")
+                
+                return list(unique_documents.values())
+            else:
+                if progress_callback:
+                    progress_callback("No metadata found in database tables")
+        
+        except Exception as e:
+            if progress_callback:
+                progress_callback(f"Error accessing SQLite database: {str(e)}")
+        
+        # If direct database access failed, look for files in the directory
+        if progress_callback:
+            progress_callback("Looking for document files in vector store directory...")
+        
+        # Look for content_hash.txt which indicates the directory was used for document storage
+        if os.path.exists(os.path.join(db_path, "content_hash.txt")):
+            if progress_callback:
+                progress_callback("Found content_hash.txt which indicates documents were stored")
+            
+            # Try to find the knowledge directory
+            potential_knowledge_dirs = []
+            
+            # Check for knowledge directory in common locations
+            for potential_dir in ["./knowledge", "../knowledge", "../../knowledge"]:
+                if os.path.exists(potential_dir):
+                    potential_knowledge_dirs.append(potential_dir)
+            
+            # If session_state has a knowledge directory
+            if hasattr(st, "session_state") and hasattr(st.session_state, "knowledge_dir"):
+                if os.path.exists(st.session_state.knowledge_dir):
+                    potential_knowledge_dirs.append(st.session_state.knowledge_dir)
+            
+            all_documents = []
+            
+            # Look for documents in all potential knowledge directories
+            for knowledge_dir in potential_knowledge_dirs:
+                if progress_callback:
+                    progress_callback(f"Checking for documents in {knowledge_dir}")
+                
+                if os.path.exists(knowledge_dir):
+                    for file in os.listdir(knowledge_dir):
+                        if file.lower().endswith(('.pdf', '.txt')):
+                            file_path = os.path.join(knowledge_dir, file)
+                            file_stats = os.stat(file_path)
+                            
+                            # Create a document metadata entry
+                            doc_metadata = {
+                                "source": file,
+                                "filename": file,
+                                "file_path": file_path,
+                                "file_type": os.path.splitext(file)[1].lower(),
+                                "last_modified": datetime.fromtimestamp(file_stats.st_mtime).strftime('%Y-%m-%d'),
+                                "size": file_stats.st_size,
+                                "found_in": knowledge_dir
+                            }
+                            
+                            all_documents.append(doc_metadata)
+            
+            if all_documents:
+                if progress_callback:
+                    progress_callback(f"Found {len(all_documents)} documents in knowledge directories")
+                return all_documents
+            else:
+                if progress_callback:
+                    progress_callback("No documents found in knowledge directories")
+        
+        # If we got here, we couldn't find any documents
+        return []
+        
+    except Exception as e:
+        if progress_callback:
+            progress_callback(f"Error listing documents in vector store: {str(e)}")
+        return []
+
+
 def run():
     """Run the data import interface"""
     
     # Page header
     st.markdown("<h1 style='font-size:1.5rem;'>📥 Import RAG Data</h1>", unsafe_allow_html=True)
     st.markdown("<p>Import and process documents for your RAG application.</p>", unsafe_allow_html=True)
-    
-    # Check if LangChain is available
-    if not LANGCHAIN_AVAILABLE:
-        st.error(
-            "LangChain is not available. Please install the required packages:\n\n"
-            "```bash\npip install langchain langchain-community langchain-ollama chromadb\n```"
-        )
-        return
         
     # Initialize session state for settings
     if "knowledge_dir" not in st.session_state:
         st.session_state.knowledge_dir = "./knowledge/"
     
-    if "db_path" not in st.session_state:
-        st.session_state.db_path = "./chroma_db"
+    if "db_dir" not in st.session_state:
+        st.session_state.db_dir = "./chroma_db"
         
     if "chunk_size" not in st.session_state:
         st.session_state.chunk_size = 1000
@@ -360,11 +553,11 @@ def run():
     if "chunk_overlap" not in st.session_state:
         st.session_state.chunk_overlap = 200
         
-    if "embedding_model" not in st.session_state:
-        st.session_state.embedding_model = "granite-embedding:278m"
+    if "embeddings" not in st.session_state:
+        st.session_state.embeddings = "granite-embedding:278m"
         
-    if "llm_model" not in st.session_state:
-        st.session_state.llm_model = "qwen3:8b"
+    if "llm" not in st.session_state:
+        st.session_state.llm = "qwen3:8b"
         
     if "progress_messages" not in st.session_state:
         st.session_state.progress_messages = []
@@ -383,7 +576,7 @@ def run():
                           help="Directory to store knowledge base files")
             
             st.text_input("Vector Database Path", 
-                          value=st.session_state.db_path,
+                          value=st.session_state.db_dir,
                           key="db_path_input",
                           help="Directory to store the ChromaDB vector database")
             
@@ -419,11 +612,11 @@ def run():
         # Save settings button
         if st.button("Save Settings"):
             st.session_state.knowledge_dir = st.session_state.knowledge_dir_input
-            st.session_state.db_path = st.session_state.db_path_input
+            st.session_state.db_dir = st.session_state.db_dir_input
             st.session_state.chunk_size = st.session_state.chunk_size_input
             st.session_state.chunk_overlap = st.session_state.chunk_overlap_input
-            st.session_state.embedding_model = st.session_state.embedding_model_input
-            st.session_state.llm_model = st.session_state.llm_model_input
+            st.session_state.embeddings = st.session_state.embeddings_input
+            st.session_state.llm = st.session_state.llm_input
             st.success("Settings saved!")
     
     # Ollama status
@@ -436,13 +629,13 @@ def run():
             st.code(ollama_models)
             
         # Check if required models are available
-        if st.session_state.embedding_model not in ollama_models:
-            st.warning(f"⚠️ Embedding model '{st.session_state.embedding_model}' is not available.")
-            st.code(f"ollama pull {st.session_state.embedding_model}")
+        if st.session_state.embeddings not in ollama_models:
+            st.warning(f"⚠️ Embedding model '{st.session_state.embeddings}' is not available.")
+            st.code(f"ollama pull {st.session_state.embeddings}")
             
-        if st.session_state.llm_model not in ollama_models:
-            st.warning(f"⚠️ LLM model '{st.session_state.llm_model}' is not available.")
-            st.code(f"ollama pull {st.session_state.llm_model}")
+        if st.session_state.llm not in ollama_models:
+            st.warning(f"⚠️ LLM model '{st.session_state.llm}' is not available.")
+            st.code(f"ollama pull {st.session_state.llm}")
     else:
         st.error(
             "❌ Ollama is not running or not installed. Please install and start Ollama:\n\n"
@@ -480,7 +673,7 @@ def run():
             # Clear previous progress messages
             st.session_state.progress_messages = []
             
-            # Create progress bar
+            # Create the progress bar
             progress_bar = st.progress(0)
             status_text = st.empty()
             
@@ -502,8 +695,8 @@ def run():
                     files=uploaded_files,
                     chunk_size=st.session_state.chunk_size,
                     chunk_overlap=st.session_state.chunk_overlap,
-                    embedding_model=st.session_state.embedding_model,
-                    db_path=st.session_state.db_path,
+                    embedding_model=st.session_state.embeddings,
+                    db_path=st.session_state.db_dir,
                     progress_callback=update_progress
                 )
                 
@@ -517,48 +710,94 @@ def run():
                     st.json({
                         "Documents": len(uploaded_files),
                         "Chunks": vectorstore._collection.count(),
-                        "Database Path": st.session_state.db_path,
-                        "Embedding Model": st.session_state.embedding_model
+                        "Database Path": st.session_state.db_dir,
+                        "Embedding Model": st.session_state.embeddings
                     })
                 else:
                     st.error("❌ Failed to process documents and create vector store.")
-    
-    # URL input
-    st.subheader("Import from URL")
-    
-    col1, col2 = st.columns([3, 1])
-    
-    with col1:
-        url = st.text_input("Enter URL to import content from:")
-    
-    with col2:
-        if st.button("Import from URL", disabled=True):  # Currently disabled as not implemented
-            st.info("URL import functionality is not implemented yet.")
-    
-    st.info("Note: URL import functionality will be available in a future update.")
-    
+
     # Display information about the RAG system
     st.subheader("RAG System Information")
     
     # Check if vector store exists
-    vector_store_exists = os.path.exists(st.session_state.db_path)
+    vector_store_exists = os.path.exists(st.session_state.db_dir)
     
     if vector_store_exists:
         try:
-            client = chromadb.PersistentClient(path=st.session_state.db_path)
-            collection = client.get_collection("document_chunks")
+            print(f"vector store exists: {vector_store_exists}")
+            print(f"vector store path: {st.session_state.db_dir}")
+            client = chromadb.PersistentClient(path=st.session_state.db_dir)
+            print(f"vector store client: {client}")
+            collection = client.get_collection(st.session_state.collection_name
+)
+            print(f"vector store collection: {collection}")
             document_count = collection.count()
-            
-            st.success(f"✅ Vector store found at {st.session_state.db_path}")
+            print(f"Document count: {document_count}")
+
+            st.success(f"✅ Vector store found at {st.session_state.db_dir}")
             st.json({
-                "Collection": "document_chunks",
+                "Collection": st.session_state.collection_name
+,
                 "Document Count": document_count,
-                "Database Path": st.session_state.db_path
+                "Database Path": st.session_state.db_dir
             })
+            
+            # NEW CODE: Display the list of documents in the vector store
+            st.subheader("Imported Documents")
+            
+            if st.button("Refresh Document List"):
+                st.session_state.refresh_doc_list = True
+            
+            # Initialize the document list in session state if needed
+            if "document_list" not in st.session_state or "refresh_doc_list" in st.session_state:
+                with st.spinner("Loading document list..."):
+                    # Create a progress placeholder
+                    progress_text = st.empty()
+                    
+                    # Progress callback
+                    def doc_list_progress(message):
+                        progress_text.text(message)
+                    
+                    # Get the document list
+                    documents = list_documents_in_vectorstore(
+                        db_path=st.session_state.db_dir,
+                        progress_callback=doc_list_progress
+                    )
+                    
+                    st.session_state.document_list = documents
+                    if "refresh_doc_list" in st.session_state:
+                        del st.session_state.refresh_doc_list
+            
+            # Display documents
+            if st.session_state.document_list:
+                # Create a list of documents with key information
+                doc_list = []
+                for doc in st.session_state.document_list:
+                    doc_list.append({
+                        "Title": doc.get("title", "Unknown"),
+                        "Source": doc.get("source", "Unknown"),
+                        "Type": doc.get("file_type", "Unknown"),
+                        "Last Modified": doc.get("last_modified", "Unknown")
+                    })
+                
+                # Display document table
+                st.table(doc_list)
+                
+                # Provide a download option for document list
+                if st.download_button(
+                    label="Download Document List",
+                    data="\n".join([f"{d['Title']},{d['Source']},{d['Type']},{d['Last Modified']}" for d in doc_list]),
+                    file_name="imported_documents.csv",
+                    mime="text/csv",
+                ):
+                    st.success("Document list downloaded successfully!")
+            else:
+                st.info("No documents found in the vector store.")
+                
         except Exception as e:
             st.warning(f"⚠️ Vector store exists but could not be accessed: {str(e)}")
     else:
-        st.warning(f"⚠️ No vector store found at {st.session_state.db_path}")
+        st.warning(f"⚠️ No vector store found at {st.session_state.db_dir}")
         st.info("Upload and process documents to create a vector store.")
 
     # Add information about other functionalities

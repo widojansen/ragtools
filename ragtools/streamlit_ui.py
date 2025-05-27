@@ -22,7 +22,8 @@ class RagStreamlitUI:
         db_dir: str = "",
         knowledge_dir: str = "",
         llm: str = "",
-        embeddings: str = ""
+        embeddings: str = "",
+        collection_name: str = "",
     ):
         """
         Initialize the Streamlit UI for RAG applications
@@ -39,6 +40,7 @@ class RagStreamlitUI:
         self.knowledge_dir = knowledge_dir
         self.llm = llm
         self.embeddings = embeddings
+        self.collection_name = collection_name
 
         
         # Remove the st.set_page_config call from here
@@ -63,6 +65,7 @@ class RagStreamlitUI:
             st.session_state.knowledge_dir = self.knowledge_dir
             st.session_state.llm = self.llm
             st.session_state.embeddings = self.embeddings
+            st.session_state.collection_name = self.collection_name
 
     def run(self):
         """Run the Streamlit UI application"""

@@ -5,7 +5,6 @@ import subprocess
 from pathlib import Path
 from typing import List, Dict, Any, Optional
 import hashlib
-
 import streamlit
 
 # Import necessary LangChain components
@@ -15,6 +14,7 @@ from langchain.text_splitter import RecursiveCharacterTextSplitter
 from langchain_ollama import OllamaEmbeddings
 from langchain.chains import RetrievalQA
 from langchain_chroma import Chroma
+
 
 # Configure logging
 logging.basicConfig(level=logging.INFO, format='%(message)s')
@@ -225,7 +225,9 @@ def create_or_load_vectorstore(embeddings: str, content_directory: str, db_direc
             try:
                 vector_store = Chroma(
                     persist_directory=db_directory,
-                    embedding_function=embed_model
+                    embedding_function=embed_model,
+                    collection_name=streamlit.session_state.collection_name
+
                 )
 
                 if vector_store._collection.count() <= 0:
@@ -275,7 +277,9 @@ def create_or_load_vectorstore(embeddings: str, content_directory: str, db_direc
                 # Create an empty vector store
                 vector_store = Chroma(
                     persist_directory=db_directory,
-                    embedding_function=embed_model
+                    embedding_function=embed_model,
+                    collection_name=streamlit.session_state.collection_name
+
                 )
                 
                 return vector_store
@@ -298,7 +302,9 @@ def create_or_load_vectorstore(embeddings: str, content_directory: str, db_direc
                     vector_store = Chroma.from_documents(
                         documents=chunks,
                         embedding=embed_model,
-                        persist_directory=db_directory
+                        persist_directory=db_directory,
+                        collection_name=streamlit.session_state.collection_name
+
                     )
                     
                     # Save the content hash
