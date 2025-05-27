@@ -195,21 +195,8 @@ def run():
     # Try to find system_prompt.txt at the project root level
     try:
         # Get the actual project root path
-        import os
-        
-        # Use a more reliable method to find the project root
-        # First, try to find the app.py file which is at the project root
-        current_dir = os.path.dirname(os.path.abspath(__file__))
-        # Navigate up to find BraceFaceRag root
-        project_root = os.path.abspath(os.path.join(current_dir, "..", "..", ".."))
-        
-        # Check if this path looks right by checking for some known files
-        if not os.path.exists(os.path.join(project_root, "app.py")):
-            # If app.py isn't found, try an alternative approach
-            project_root = os.path.abspath(os.path.join(os.path.dirname(os.path.abspath(__file__)), "..", "..", "..", "BraceFaceRag"))
-        
-        system_prompt_file = os.path.join(project_root, "system_prompt.txt")
-        
+        system_prompt_file = os.path.join(st.session_state.project_dir, "system_prompt.txt")
+        print(f"st.session_state.project_dir: {st.session_state.project_dir}")
         print(f"Checking for system prompt at: {system_prompt_file}")
         # print(f"File exists: {os.path.exists(system_prompt_file)}")
         
