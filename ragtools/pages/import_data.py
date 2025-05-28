@@ -568,7 +568,7 @@ def list_documents_in_vectorstore(db_path: str, progress_callback=None) -> list:
                                        FROM embedding_metadata em
                                                 JOIN embeddings e ON em.id = e.id
                                                 JOIN segments s ON e.segment_id = s.id
-                                                JOIN collections c ON s.collection_id = c.id
+                                                JOIN collections c ON s.collection = c.id
                                        WHERE c.name = ?
                                          AND em.key = 'source'
                                        GROUP BY em.string_value
@@ -576,7 +576,7 @@ def list_documents_in_vectorstore(db_path: str, progress_callback=None) -> list:
 
                         metadata_results = cursor.fetchall()
                         if progress_callback:
-                            progress_callback(f"Metadata found: {metadata_results}")
+                            #progress_callback(f"Metadata found: {metadata_results}")
                             print(f"Metadata found: {metadata_results}")
 
                         if metadata_results:
@@ -589,7 +589,7 @@ def list_documents_in_vectorstore(db_path: str, progress_callback=None) -> list:
                             return unique_docs
                     except Exception as e:
                         if progress_callback:
-                            progress_callback(f"Error querying collection {collection_name}: {str(e)}")
+                            #progress_callback(f"Error querying collection {collection_name}: {str(e)}")
                             print(f"Error querying collection {collection_name}: {str(e)}")
 
                         # Try a simpler query
@@ -602,7 +602,7 @@ def list_documents_in_vectorstore(db_path: str, progress_callback=None) -> list:
                                            """)
                             metadata_results = cursor.fetchall()
                             if progress_callback:
-                                progress_callback(f"Metadata found on direct SQL run: {metadata_results}...")
+                                #progress_callback(f"Metadata found on direct SQL run: {metadata_results}...")
                                 print(f"Metadata found on direct SQL run: {metadata_results}")
 
                             if metadata_results:
