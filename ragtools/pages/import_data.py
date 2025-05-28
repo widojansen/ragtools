@@ -362,13 +362,13 @@ def process_documents(
 def list_documents_in_vectorstore(db_path: str, progress_callback=None) -> list:
     """
     List all documents stored in the Chroma vector store by examining the database directly.
-    
+
     Args:
         db_path: Directory where the vector database is stored
         progress_callback: Optional callback for progress updates
-        
+
     Returns:
-        A list of document metadata
+        A list of document metadata or empty list if no metadata found
     """
 
     try:
@@ -376,160 +376,343 @@ def list_documents_in_vectorstore(db_path: str, progress_callback=None) -> list:
             if progress_callback:
                 progress_callback(f"Vector store directory does not exist: {db_path}")
             return []
-        
+
         # Check if SQLite database exists
         sqlite_db = os.path.join(db_path, "chroma.sqlite3")
         if not os.path.exists(sqlite_db):
             if progress_callback:
                 progress_callback(f"SQLite database not found at {sqlite_db}")
             return []
-        
+
         # Try direct SQLite access to get metadata
         import sqlite3
-        
+        import json
+
         if progress_callback:
             progress_callback("Accessing Chroma SQLite database directly...")
-            print(f"Accessing Chroma SQLite database directly...")
+            print("Accessing Chroma SQLite database directly...")
 
         try:
             # Connect to the SQLite database
             conn = sqlite3.connect(sqlite_db)
             cursor = conn.cursor()
-            
+
             # Get information about tables
             cursor.execute("SELECT name FROM sqlite_master WHERE type='table';")
             tables = cursor.fetchall()
+            table_names = [t[0] for t in tables]
+
             if progress_callback:
-                progress_callback(f"Found tables: {[t[0] for t in tables]}")
-            print(f"Found tables: {[t[0] for t in tables]}")
-            # Look for the embeddings or metadata table
-            metadata_list = []
-            
-            # Try to query each table that might contain metadata
-            for potential_table in ['embeddings', 'metadata', 'documents', 'document_metadata']:
-                try:
-                    # Check if this table exists
-                    cursor.execute(f"SELECT name FROM sqlite_master WHERE type='table' AND name='{potential_table}';")
-                    if not cursor.fetchone():
-                        continue
-                    
-                    # Check table schema
-                    cursor.execute(f"PRAGMA table_info({potential_table});")
-                    columns = [col[1] for col in cursor.fetchall()]
+                progress_callback(f"Found tables: {table_names}")
+                print(f"Found tables: {table_names}")
+
+            # Find collection ID for the dental_care_information collection
+            cursor.execute("SELECT id FROM collections WHERE name = 'dental_care_information'")
+            collection_id_result = cursor.fetchone()
+
+            if not collection_id_result:
+                if progress_callback:
+                    progress_callback("Collection 'dental_care_information' not found")
+                    print("Collection 'dental_care_information' not found")
+                return []
+
+            collection_id = collection_id_result[0]
+            if progress_callback:
+                progress_callback(f"Found collection ID: {collection_id}")
+                print(f"Found collection ID: {collection_id}")
+
+            # Get segment IDs for this collection
+            # First check the schema of the segments table
+            cursor.execute("PRAGMA table_info(segments)")
+            segment_columns = cursor.fetchall()
+            if progress_callback:
+                progress_callback(f"Segments table columns: {[col[1] for col in segment_columns]}")
+                print(f"Segments table columns: {[col[1] for col in segment_columns]}")
+
+            # Then use the correct column name for the collection relation
+            # It might be named differently in your version, such as 'collection' instead of 'collection_id'
+            # Look for a column that likely references the collection table
+
+            # After inspecting the table schema, modify the query to use the correct column name
+            # For example, if the column is named 'collection' instead:
+            cursor.execute("SELECT id FROM segments WHERE collection = ?", (collection_id,))
+
+            segment_ids = [row[0] for row in cursor.fetchall()]
+
+            if not segment_ids:
+                if progress_callback:
+                    progress_callback("No segments found for this collection")
+                    print("No segments found for this collection")
+                return []
+
+            if progress_callback:
+                progress_callback(f"Found {len(segment_ids)} segments")
+                print(f"Found {len(segment_ids)} segments")
+
+            # Get embedding IDs for these segments
+            all_embedding_ids = []
+            for segment_id in segment_ids:
+                cursor.execute("SELECT id FROM embeddings WHERE segment_id = ?", (segment_id,))
+                embedding_ids = [row[0] for row in cursor.fetchall()]
+                all_embedding_ids.extend(embedding_ids)
+
+            if not all_embedding_ids:
+                if progress_callback:
+                    progress_callback("No embeddings found for these segments")
+                    print("No embeddings found for these segments")
+                return []
+
+            if progress_callback:
+                progress_callback(f"Found {len(all_embedding_ids)} embeddings")
+                print(f"Found {len(all_embedding_ids)} embeddings")
+
+            # Extract document information using embedding_fulltext_search
+            # This is where document content and metadata is stored in ChromaDB
+            if 'embedding_fulltext_search_data' in table_names:
+                cursor.execute("PRAGMA table_info(embedding_fulltext_search_data);")
+                columns = [col[1] for col in cursor.fetchall()]
+                if progress_callback:
+                    progress_callback(f"Table embedding_fulltext_search_data has columns: {columns}")
+                    print(f"Table embedding_fulltext_search_data has columns: {columns}")
+
+                # Get document data - sample to see structure first
+                cursor.execute("SELECT * FROM embedding_fulltext_search_data LIMIT 1")
+                sample = cursor.fetchone()
+                if sample:
                     if progress_callback:
-                        progress_callback(f"Table {potential_table} has columns: {columns}")
-                    
-                    # If there's a metadata column
-                    if 'metadata' in columns:
-                        cursor.execute(f"SELECT metadata FROM {potential_table};")
-                        rows = cursor.fetchall()
+                        progress_callback(f"Sample data structure: {sample}")
+                        print(f"Sample data structure: {sample}")
+
+                # Now fetch actual document data
+                cursor.execute("SELECT id, block FROM embedding_fulltext_search_data")
+                docs = cursor.fetchall()
+
+                if progress_callback:
+                    progress_callback(f"Found {len(docs)} documents in search data")
+                    print(f"Found {len(docs)} documents in search data")
+
+                # Parse the documents
+                parsed_docs = []
+                for doc in docs:
+                    try:
+                        # The block column in embedding_fulltext_search_data contains JSON
+                        doc_data = json.loads(doc[1])
+                        if doc_data:
+                            # Extract metadata from the block structure
+                            if isinstance(doc_data, dict):
+                                if 'metadata' in doc_data:
+                                    metadata = doc_data['metadata']
+                                    parsed_docs.append(metadata)
+                                elif 'document' in doc_data:
+                                    # Create metadata from document info
+                                    metadata = {
+                                        'document_id': doc[0],
+                                        'content_preview': doc_data['document'][:100] + '...' if len(
+                                            doc_data['document']) > 100 else doc_data['document']
+                                    }
+                                    parsed_docs.append(metadata)
+                    except Exception as e:
+                        print(f"Error parsing document {doc[0]}: {e}")
+                        continue
+
+                if parsed_docs:
+                    if progress_callback:
+                        progress_callback(f"Parsed {len(parsed_docs)} documents")
+                        print(f"Parsed {len(parsed_docs)} documents")
+
+                    # Group documents by source to get unique source documents
+                    unique_docs = {}
+                    for doc in parsed_docs:
+                        source = None
+                        for field in ['source', 'filename', 'file_path']:
+                            if field in doc and doc[field]:
+                                source = doc[field]
+                                break
+
+                        if source and source not in unique_docs:
+                            unique_docs[source] = doc
+
+                    if progress_callback:
+                        progress_callback(f"Found {len(unique_docs)} unique documents")
+                        print(f"Found {len(unique_docs)} unique documents")
+
+                    return list(unique_docs.values())
+
+            # Alternative approach: try using embedding_metadata table
+            if 'embedding_metadata' in table_names:
+                cursor.execute("PRAGMA table_info(embedding_metadata);")
+                columns = [col[1] for col in cursor.fetchall()]
+                if progress_callback:
+                    progress_callback(f"Table embedding_metadata has columns: {columns}")
+                    print(f"Table embedding_metadata has columns: {columns}")
+
+                # Look for source metadata
+                try:
+                    found_collections = []
+                    cursor.execute("SELECT name FROM collections")
+                    found_collections = [row[0] for row in cursor.fetchall()]
+                    if progress_callback:
+                        progress_callback(f"Found collections: {found_collections}")
+                        print(f"Found collections: {found_collections}")
+
+                    collection_name = 'dental_care_information'
+                    if progress_callback:
+                        progress_callback(f"Looking for metadata in collection: {collection_name}")
+                        print(f"Looking for metadata in collection: {collection_name}")
+
+                    # Directly extract metadata from database
+                    try:
+                        # This query assumes the metadata is stored in embedding_metadata
+                        cursor.execute("""
+                                       SELECT em.key, em.string_value, COUNT(*)
+                                       FROM embedding_metadata em
+                                                JOIN embeddings e ON em.id = e.id
+                                                JOIN segments s ON e.segment_id = s.id
+                                                JOIN collections c ON s.collection_id = c.id
+                                       WHERE c.name = ?
+                                         AND em.key = 'source'
+                                       GROUP BY em.string_value
+                                       """, (collection_name,))
+
+                        metadata_results = cursor.fetchall()
                         if progress_callback:
-                            progress_callback(f"Found {len(rows)} rows with metadata in {potential_table}")
-                        
-                        import json
-                        for row in rows:
-                            try:
-                                metadata = json.loads(row[0])
-                                if metadata and isinstance(metadata, dict):
-                                    metadata_list.append(metadata)
-                            except:
-                                pass
+                            progress_callback(f"Metadata found: {metadata_results}")
+                            print(f"Metadata found: {metadata_results}")
+
+                        if metadata_results:
+                            unique_docs = []
+                            for key, source, count in metadata_results:
+                                unique_docs.append({
+                                    'source': source,
+                                    'document_count': count
+                                })
+                            return unique_docs
+                    except Exception as e:
+                        if progress_callback:
+                            progress_callback(f"Error querying collection {collection_name}: {str(e)}")
+                            print(f"Error querying collection {collection_name}: {str(e)}")
+
+                        # Try a simpler query
+                        try:
+                            cursor.execute("""
+                                           SELECT key, string_value, COUNT (*)
+                                           FROM embedding_metadata
+                                           WHERE key = 'source'
+                                           GROUP BY string_value
+                                           """)
+                            metadata_results = cursor.fetchall()
+                            if progress_callback:
+                                progress_callback(f"Metadata found on direct SQL run: {metadata_results}...")
+                                print(f"Metadata found on direct SQL run: {metadata_results}")
+
+                            if metadata_results:
+                                unique_docs = []
+                                for key, source, count in metadata_results:
+                                    unique_docs.append({
+                                        'source': source,
+                                        'document_count': count
+                                    })
+                                return unique_docs
+                        except Exception as inner_e:
+                            if progress_callback:
+                                progress_callback(f"Error on direct metadata query: {str(inner_e)}")
+                                print(f"Error on direct metadata query: {str(inner_e)}")
+
                 except Exception as e:
                     if progress_callback:
-                        progress_callback(f"Error querying table {potential_table}: {str(e)}")
-                    continue
-            
-            conn.close()
-            
-            # Process the metadata to extract unique documents
-            if metadata_list:
-                # Extract unique document sources from metadata
-                unique_documents = {}
-                for metadata in metadata_list:
-                    # Try different fields that might identify the document
-                    source = None
-                    for field in ['source', 'filename', 'file_path', 'path']:
-                        if field in metadata and metadata[field]:
-                            source = metadata[field]
+                        progress_callback(f"Error examining metadata: {str(e)}")
+                        print(f"Error examining metadata: {str(e)}")
+
+            # If we still don't have documents, use the actual collection API
+            if progress_callback:
+                progress_callback("Using ChromaDB API to get document metadata")
+                print("Using ChromaDB API to get document metadata")
+
+            try:
+                # Import ChromaDB here to avoid dependency if not needed
+                from chromadb import Client, Settings
+
+                # Create client
+                client = Client(Settings(
+                    chroma_db_impl="duckdb+parquet",
+                    persist_directory=db_path
+                ))
+
+                # Get the collection
+                collection = client.get_collection(name="dental_care_information")
+
+                # Get a small sample of IDs to retrieve metadata
+                sample_results = collection.get(limit=10)
+
+                if sample_results and 'metadatas' in sample_results and sample_results['metadatas']:
+                    if progress_callback:
+                        progress_callback("Retrieved sample metadata from ChromaDB API")
+                        print("Retrieved sample metadata from ChromaDB API")
+
+                    # Show sample metadata structure
+                    print(f"Sample metadata structure: {sample_results['metadatas'][0]}")
+
+                    # Now, we need to get all unique sources from the database
+                    # But we'll need to do this in batches to avoid memory issues
+                    batch_size = 500
+                    all_metadatas = []
+                    offset = 0
+
+                    while True:
+                        results = collection.get(limit=batch_size, offset=offset)
+                        if not results or not results['metadatas'] or not results['metadatas'][0]:
                             break
-                    
-                    if source and source not in unique_documents:
-                        unique_documents[source] = metadata
-                
+
+                        all_metadatas.extend(results['metadatas'])
+                        offset += batch_size
+
+                        if len(results['metadatas']) < batch_size:
+                            break
+
+                    # Extract unique documents by source
+                    unique_docs = {}
+                    for metadata in all_metadatas:
+                        if metadata:
+                            source = None
+                            for field in ['source', 'filename', 'file_path']:
+                                if field in metadata and metadata[field]:
+                                    source = metadata[field]
+                                    break
+
+                            if source and source not in unique_docs:
+                                unique_docs[source] = metadata
+
+                    if progress_callback:
+                        progress_callback(f"Found {len(unique_docs)} unique documents from ChromaDB API")
+                        print(f"Found {len(unique_docs)} unique documents from ChromaDB API")
+
+                    return list(unique_docs.values())
+
+            except Exception as e:
                 if progress_callback:
-                    progress_callback(f"Found {len(unique_documents)} unique documents in database")
-                
-                return list(unique_documents.values())
-            else:
-                if progress_callback:
-                    progress_callback("No metadata found in database tables")
-        
+                    progress_callback(f"Error using ChromaDB API: {str(e)}")
+                    print(f"Error using ChromaDB API: {str(e)}")
+
+            if progress_callback:
+                progress_callback("No metadata found in database tables")
+                print("\n\nNo metadata found in database tables")
+
+            return []
+
         except Exception as e:
             if progress_callback:
-                progress_callback(f"Error accessing SQLite database: {str(e)}")
-        
-        # If direct database access failed, look for files in the directory
-        if progress_callback:
-            progress_callback("Looking for document files in vector store directory...")
-        
-        # Look for content_hash.txt which indicates the directory was used for document storage
-        if os.path.exists(os.path.join(db_path, "content_hash.txt")):
-            if progress_callback:
-                progress_callback("Found content_hash.txt which indicates documents were stored")
-            
-            # Try to find the knowledge directory
-            potential_knowledge_dirs = []
-            
-            # Check for knowledge directory in common locations
-            for potential_dir in ["./knowledge", "../knowledge", "../../knowledge"]:
-                if os.path.exists(potential_dir):
-                    potential_knowledge_dirs.append(potential_dir)
-            
-            # If session_state has a knowledge directory
-            if hasattr(st, "session_state") and hasattr(st.session_state, "knowledge_dir"):
-                if os.path.exists(st.session_state.knowledge_dir):
-                    potential_knowledge_dirs.append(st.session_state.knowledge_dir)
-            
-            all_documents = []
-            
-            # Look for documents in all potential knowledge directories
-            for knowledge_dir in potential_knowledge_dirs:
-                if progress_callback:
-                    progress_callback(f"Checking for documents in {knowledge_dir}")
-                
-                if os.path.exists(knowledge_dir):
-                    for file in os.listdir(knowledge_dir):
-                        if file.lower().endswith(('.pdf', '.txt')):
-                            file_path = os.path.join(knowledge_dir, file)
-                            file_stats = os.stat(file_path)
-                            
-                            # Create a document metadata entry
-                            doc_metadata = {
-                                "source": file,
-                                "filename": file,
-                                "file_path": file_path,
-                                "file_type": os.path.splitext(file)[1].lower(),
-                                "last_modified": datetime.fromtimestamp(file_stats.st_mtime).strftime('%Y-%m-%d'),
-                                "size": file_stats.st_size,
-                                "found_in": knowledge_dir
-                            }
-                            
-                            all_documents.append(doc_metadata)
-            
-            if all_documents:
-                if progress_callback:
-                    progress_callback(f"Found {len(all_documents)} documents in knowledge directories")
-                return all_documents
-            else:
-                if progress_callback:
-                    progress_callback("No documents found in knowledge directories")
-        
-        # If we got here, we couldn't find any documents
-        return []
-        
+                progress_callback(f"Error accessing database: {str(e)}")
+                print(f"Error accessing database: {str(e)}")
+            import traceback
+            print(traceback.format_exc())
+            return []
+
     except Exception as e:
         if progress_callback:
             progress_callback(f"Error listing documents in vector store: {str(e)}")
+            print(f"Error listing documents in vector store: {str(e)}")
+        import traceback
+        print(traceback.format_exc())
         return []
 
 
