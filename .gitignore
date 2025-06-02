@@ -6,8 +6,11 @@ dist/
 wheels/
 *.egg-info
 .DS_Store
+mcp_config.json
 
 # Virtual environments
 .venv
 .idea
+
+
 
