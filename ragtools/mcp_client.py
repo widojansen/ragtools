@@ -6,10 +6,9 @@ Provides integration with Model Context Protocol servers
 import asyncio
 import json
 import logging
-from typing import Dict, List, Optional, Any, Union
+from typing import Dict, List, Optional, Any
 from pathlib import Path
 from dataclasses import dataclass
-import httpx
 from mcp import ClientSession, StdioServerParameters
 from mcp.client.stdio import stdio_client
 
@@ -21,8 +20,8 @@ class MCPServerConfig:
     """Configuration for an MCP server"""
     name: str
     command: str
-    args: List[str] = None
-    env: Dict[str, str] = None
+    args: Optional[List[str]] = None
+    env: Optional[Dict[str, str]] = None
     description: str = ""
     enabled: bool = True
 
@@ -43,6 +42,7 @@ class MCPClient:
         self.servers: Dict[str, MCPServerConfig] = {}
         self.sessions: Dict[str, ClientSession] = {}
         self.server_capabilities: Dict[str, Dict] = {}
+        self._context_managers: Dict[str, Any] = {}  # Store active context managers
         self.config_path = config_path or "mcp_config.json"
         self._load_config()
 
@@ -114,6 +114,7 @@ class MCPClient:
             logger.info(f"Server {server_name} is disabled")
             return False
 
+        context_manager = None
         try:
             # Create server parameters
             server_params = StdioServerParameters(
@@ -122,9 +123,14 @@ class MCPClient:
                 env=server_config.env
             )
 
-            # Connect to server
-            stdio_transport = await stdio_client(server_params)
-            session = ClientSession(stdio_transport[0], stdio_transport[1])
+            # Connect to server - store context manager for proper lifecycle management
+            context_manager = stdio_client(server_params)
+            read_stream, write_stream = await context_manager.__aenter__()
+            
+            # Store context manager for later cleanup
+            self._context_managers[server_name] = context_manager
+            
+            session = ClientSession(read_stream, write_stream)
 
             # Initialize session
             await session.initialize()
@@ -151,14 +157,33 @@ class MCPClient:
 
         except Exception as e:
             logger.error(f"Failed to connect to server {server_name}: {e}")
+            
+            # Clean up context manager if connection failed
+            if context_manager and server_name in self._context_managers:
+                try:
+                    await context_manager.__aexit__(None, None, None)
+                    del self._context_managers[server_name]
+                except Exception as cleanup_error:
+                    logger.error(f"Error cleaning up context manager for {server_name}: {cleanup_error}")
+            
             return False
 
     async def disconnect_server(self, server_name: str):
         """Disconnect from an MCP server"""
         if server_name in self.sessions:
             try:
-                await self.sessions[server_name].close()
+                # Close session if it has a close method
+                session = self.sessions[server_name]
+                if hasattr(session, 'close'):
+                    await session.close()
                 del self.sessions[server_name]
+                
+                # Clean up context manager
+                if server_name in self._context_managers:
+                    context_manager = self._context_managers[server_name]
+                    await context_manager.__aexit__(None, None, None)
+                    del self._context_managers[server_name]
+                
                 if server_name in self.server_capabilities:
                     del self.server_capabilities[server_name]
                 logger.info(f"Disconnected from MCP server: {server_name}")
@@ -186,6 +211,23 @@ class MCPClient:
         if tasks:
             await asyncio.gather(*tasks, return_exceptions=True)
 
+    async def cleanup(self):
+        """Cleanup all resources and connections"""
+        await self.disconnect_all_servers()
+        
+        # Final cleanup of any remaining context managers
+        for server_name, context_manager in list(self._context_managers.items()):
+            try:
+                await context_manager.__aexit__(None, None, None)
+                del self._context_managers[server_name]
+            except Exception as e:
+                logger.error(f"Error during final cleanup of {server_name}: {e}")
+
+    def __del__(self):
+        """Destructor to ensure cleanup"""
+        if hasattr(self, '_context_managers') and self._context_managers:
+            logger.warning("MCPClient deleted with active connections. Use cleanup() method for proper shutdown.")
+
     def get_available_tools(self) -> Dict[str, List[Dict]]:
         """Get all available tools from connected servers"""
         return {
@@ -209,7 +251,7 @@ class MCPClient:
         try:
             session = self.sessions[server_name]
             result = await session.call_tool(tool_name, arguments)
-            return result.content if result else None
+            return result.content if hasattr(result, 'content') and result.content else None
         except Exception as e:
             logger.error(f"Error calling tool {tool_name} on {server_name}: {e}")
             return None
@@ -223,7 +265,13 @@ class MCPClient:
         try:
             session = self.sessions[server_name]
             result = await session.read_resource(uri)
-            return result.contents[0].text if result and result.contents else None
+            if result and hasattr(result, 'contents') and result.contents:
+                content = result.contents[0]
+                if hasattr(content, 'text'):
+                    return content.text
+                elif hasattr(content, 'data'):
+                    return str(content.data)
+            return None
         except Exception as e:
             logger.error(f"Error reading resource {uri} from {server_name}: {e}")
             return None
@@ -276,7 +324,7 @@ class MCPRagIntegration:
     def __init__(self, mcp_client: MCPClient):
         self.mcp_client = mcp_client
 
-    async def enhance_query_with_mcp(self, query: str, context: Dict[str, Any] = None) -> Dict[str, Any]:
+    async def enhance_query_with_mcp(self, query: str, context: Optional[Dict[str, Any]] = None) -> Dict[str, Any]:
         """
         Enhance a RAG query using MCP tools and resources
         """
@@ -339,4 +387,4 @@ class AsyncMCPClient:
         return self.client
 
     async def __aexit__(self, exc_type, exc_val, exc_tb):
-        await self.client.disconnect_all_servers()
+        await self.client.cleanup()

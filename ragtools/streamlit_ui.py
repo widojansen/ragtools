@@ -174,7 +174,7 @@ class RagStreamlitUI:
             st.error(f"Error displaying import data page: {str(e)}")
 
     @staticmethod
-    def _display_mcp_management_page(self):
+    def _display_mcp_management_page():
         """Display the MCP Management page"""
         try:
             from .pages import mcp_management
