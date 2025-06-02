@@ -5,6 +5,7 @@ import streamlit as st
 import json
 import os
 from datetime import datetime
+import time
 
 # Constants
 LOGS_FOLDER = 'chat_logs'
@@ -229,25 +230,68 @@ def run():
 
     # Settings area
     with st.expander("⚙️ Settings", expanded=False):
-        # In the settings expander section, replace the current text_area with:
-        #print(f"System context: {st.session_state.system_context}")
-        #print(f"context input: {st.session_state.context_input}")
-        if "context_input" not in st.session_state and "system_context" in st.session_state:
-            # Initialize context_input with system_context only if it doesn't exist yet
-            st.session_state.context_input = st.session_state.system_context
+        # # Debug information
+        # st.write("Debug Info:")
+        # st.write(f"Project dir: {st.session_state.get('project_dir', 'Not set')}")
+        # st.write(f"Current system_context: {st.session_state.get('system_context', 'Not set')[:100]}...")
+        # st.write(f"Current context_input: {st.session_state.get('context_input', 'Not set')[:100]}...")
+        
+        # Initialize context_input in the session state if it doesn't exist
+        if "context_input" not in st.session_state:
+            if "system_context" in st.session_state:
+                st.session_state.context_input = st.session_state.system_context
+            else:
+                st.session_state.context_input = default_system_context
 
-        # Then use the text area without setting a value parameter
-        context_input = st.text_area(
+        # Use the text area - it will automatically sync with the session state
+        context_text = st.text_area(
             "System Context:",
-            key="context_input",
-            height=100,
-            help="Instructions for the AI that apply to all messages."
+            value=st.session_state.context_input,
+            height=300,
+            help="Instructions for the AI that apply to all messages.",
+            key="context_textarea"  # Use a different key to avoid conflicts
         )
 
-        # Then use the Update Context button to sync values
-        if st.button("Update Context"):
-            st.session_state.context_input = context_input
-            st.session_state.system_context = st.session_state.context_input
+        # Update the Context button to apply changes
+        if st.button("Update Context", key="update_context_btn"):
+            try:
+                # Update session state
+                st.session_state.context_input = context_text
+                st.session_state.system_context = context_text
+                
+                # Save to file
+                system_prompt_file = os.path.join(st.session_state.project_dir, "system_prompt.txt")
+                print(f"Attempting to save to: {system_prompt_file}")
+                print(f"Content to save: {context_text[:100]}...")
+                
+                # Ensure the directory exists
+                os.makedirs(os.path.dirname(system_prompt_file), exist_ok=True)
+                
+                with open(system_prompt_file, 'w', encoding='utf-8') as f:
+                    f.write(context_text)
+                
+                # Verify the file was written
+                if os.path.exists(system_prompt_file):
+                    with open(system_prompt_file, 'r', encoding='utf-8') as f:
+                        saved_content = f.read()
+                    if saved_content == context_text:
+                        st.success("Context updated and saved to system_prompt.txt!")
+                        print("File saved and verified successfully")
+                    else:
+                        st.warning("File saved but content verification failed")
+                        print(f"Content mismatch - Expected: {context_text[:50]}..., Got: {saved_content[:50]}...")
+                else:
+                    st.error("File was not created")
+                    print("File was not created")
+                    
+            except Exception as e:
+                st.error(f"Error updating context: {str(e)}")
+                print(f"Exception occurred: {e}")
+                import traceback
+                traceback.print_exc()
+            
+            # Force a rerun to update the UI
+            time.sleep(0.1)  # Small delay to ensure file operations complete
             st.rerun()
 
         # Temperature Control
