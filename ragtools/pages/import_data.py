@@ -233,16 +233,14 @@ def process_documents(
                 client = chromadb.PersistentClient(path=db_path)
                 # Check if the collection exists
                 try:
-                    collection = client.get_collection(st.session_state.collection_name
-)
+                    collection = client.get_collection(st.session_state.collection_name)
                     if progress_callback:
                         progress_callback(f"Connected to existing collection with {collection.count()} documents")
                 except Exception:
                     # Collection doesn't exist
                     if progress_callback:
                         progress_callback("Creating new collection 'document_chunks'")
-                    collection = client.create_collection(st.session_state.collection_name
-)
+                    collection = client.create_collection(st.session_state.collection_name)
             except Exception as e:
                 if progress_callback:
                     progress_callback(f"Error connecting to existing database: {str(e)}")
@@ -252,16 +250,14 @@ def process_documents(
                 shutil.rmtree(db_path)
                 time.sleep(1)  # Give OS time to complete deletion
                 client = chromadb.PersistentClient(path=db_path)
-                collection = client.create_collection(st.session_state.collection_name
-)
+                collection = client.create_collection(st.session_state.collection_name)
         else:
             if progress_callback:
                 progress_callback(f"Creating new database at {db_path}")
             # Create a new ChromaDB client
             client = chromadb.PersistentClient(path=db_path)
             # Create a collection
-            collection = client.create_collection(st.session_state.collection_name
-)
+            collection = client.create_collection(st.session_state.collection_name)
         
         # Process in small batches
         batch_size = 5
@@ -340,8 +336,7 @@ def process_documents(
         # Create Langchain wrapper over the ChromaDB collection
         vectorstore = Chroma(
             client=client,
-            collection_name=st.session_state.collection_name
-,
+            collection_name=st.session_state.collection_name,
             embedding_function=embeddings
         )
         
@@ -745,6 +740,10 @@ def run():
     if "progress_messages" not in st.session_state:
         st.session_state.progress_messages = []
         
+    # Initialize file uploader state key
+    if "file_uploader_key" not in st.session_state:
+        st.session_state.file_uploader_key = 0
+        
     # Check Ollama availability
     ollama_available, ollama_models = check_ollama_availability()
     
@@ -798,8 +797,8 @@ def run():
             st.session_state.db_dir = st.session_state.db_dir_input
             st.session_state.chunk_size = st.session_state.chunk_size_input
             st.session_state.chunk_overlap = st.session_state.chunk_overlap_input
-            st.session_state.embeddings = st.session_state.embeddings_input
-            st.session_state.llm = st.session_state.llm_input
+            st.session_state.embeddings = st.session_state.embedding_model_input
+            st.session_state.llm = st.session_state.llm_model_input
             st.success("Settings saved!")
     
     # Ollama status
@@ -833,7 +832,8 @@ def run():
     uploaded_files = st.file_uploader(
         "Upload documents", 
         accept_multiple_files=True,
-        type=["pdf", "txt"]
+        type=["pdf", "txt"],
+        key=f"file_uploader_{st.session_state.file_uploader_key}"
     )
     
     # Display uploaded files
@@ -896,6 +896,10 @@ def run():
                         "Database Path": st.session_state.db_dir,
                         "Embedding Model": st.session_state.embeddings
                     })
+                    
+                    # Clear the file uploader by incrementing the key
+                    st.session_state.file_uploader_key += 1
+                    st.rerun()
                 else:
                     st.error("❌ Failed to process documents and create vector store.")
 
@@ -911,16 +915,14 @@ def run():
             print(f"vector store path: {st.session_state.db_dir}")
             client = chromadb.PersistentClient(path=st.session_state.db_dir)
             print(f"vector store client: {client}")
-            collection = client.get_collection(st.session_state.collection_name
-)
+            collection = client.get_collection(st.session_state.collection_name)
             print(f"vector store collection: {collection}")
             document_count = collection.count()
             print(f"Document count: {document_count}")
 
             st.success(f"✅ Vector store found at {st.session_state.db_dir}")
             st.json({
-                "Collection": st.session_state.collection_name
-,
+                "Collection": st.session_state.collection_name,
                 "Document Count": document_count,
                 "Database Path": st.session_state.db_dir
             })

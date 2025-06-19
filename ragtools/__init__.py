@@ -17,7 +17,7 @@ except ImportError:
     MCPRagIntegration = None
     AsyncMCPClient = None
 
-__version__ = "0.2.5.1"
+__version__ = "0.2.5.2"
 __all__ = [
     "RagStreamlitUI",
     "launch_streamlit_ui",

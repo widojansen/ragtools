@@ -6,7 +6,7 @@ import streamlit as st
 import asyncio
 import logging
 from datetime import datetime
-from typing import Dict, Any, Optional
+from typing import Dict, Any
 
 # Try to import MCP functionality
 try:
@@ -33,13 +33,13 @@ def ask_llm(prompt: str, system_context: str = "", model_context: Dict[str, Any]
             mcp_client = st.session_state.mcp_client
             mcp_integration = MCPRagIntegration(mcp_client)
 
-            # Enhance query with MCP
+            # Enhance a query with MCP
             enhanced_context = asyncio.run(
                 mcp_integration.enhance_query_with_mcp(prompt, model_context)
             )
             model_context.update(enhanced_context)
 
-            # Add web search results to system context if available
+            # Add web search results to the system context if available
             if 'web_search_results' in enhanced_context:
                 web_results = enhanced_context['web_search_results']
                 system_context += f"\n\nWeb search results for additional context:\n{web_results}"
@@ -60,7 +60,7 @@ def ask_llm(prompt: str, system_context: str = "", model_context: Dict[str, Any]
 def run():
     """Main chatbot interface with MCP enhancements"""
 
-    # Initialize session state with proper defaults
+    # Initialize the session state with proper defaults
     if "messages" not in st.session_state:
         st.session_state.messages = []
 
@@ -176,7 +176,7 @@ def run():
 
     # Chat input
     if prompt := st.chat_input("Ask me anything..."):
-        # Add user message
+        # Add a user message
         st.session_state.messages.append({"role": "user", "content": prompt})
 
         # Display user message
@@ -212,7 +212,7 @@ def run():
                                 st.write("🌐 **Web Search Results:**")
                                 st.json(updated_context["web_search_results"])
 
-                    # Add assistant message to history
+                    # Add an assistant message to history
                     assistant_message = {
                         "role": "assistant",
                         "content": response,
@@ -247,7 +247,7 @@ def _format_conversation_for_download() -> str:
 
 # Utility functions for MCP integration
 def get_mcp_status() -> Dict[str, Any]:
-    """Get current MCP status for display"""
+    """Get the current MCP status for display"""
     if not MCP_AVAILABLE or 'mcp_client' not in st.session_state:
         return {"available": False, "connected_servers": 0, "available_tools": 0}
 
