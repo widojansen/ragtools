@@ -4,6 +4,12 @@ Streamlit UI module for RAG applications
 import streamlit as st
 from typing import Optional, Dict, Any
 
+try:
+    from .mcp_client import MCPClient
+    MCP_AVAILABLE = True
+except ImportError:
+    MCP_AVAILABLE = False
+
 
 class RagStreamlitUI:
     """
@@ -24,6 +30,7 @@ class RagStreamlitUI:
         llm: str = "",
         embeddings: str = "",
         collection_name: str = "",
+        mcp_available: bool = MCP_AVAILABLE,
     ):
         """
         Initialize the Streamlit UI for RAG applications
@@ -41,6 +48,7 @@ class RagStreamlitUI:
         self.llm = llm
         self.embeddings = embeddings
         self.collection_name = collection_name
+        self.mcp_available = mcp_available
 
         
         # Remove the st.set_page_config call from here
@@ -67,6 +75,10 @@ class RagStreamlitUI:
             st.session_state.embeddings = self.embeddings
             st.session_state.collection_name = self.collection_name
 
+        # Initialize MCP client in session state if available
+        if MCP_AVAILABLE and 'mcp_client' not in st.session_state:
+            st.session_state.mcp_client = MCPClient()
+
     def run(self):
         """Run the Streamlit UI application"""
         # Display sidebar
@@ -79,10 +91,20 @@ class RagStreamlitUI:
             if st.button("💬 Chatbot", use_container_width=True):
                 st.session_state.current_page = "chatbot"
                 st.rerun()
+
+            if st.button("💬 Chatbot with MCP", use_container_width=True):
+                st.session_state.current_page = "chatbot_mcp"
+                st.rerun()
             
             if st.button("📥 Import Data", use_container_width=True):
                 st.session_state.current_page = "import_data"
                 st.rerun()
+
+            # Add the MCP Management button
+            if MCP_AVAILABLE:
+                if st.button("🔌 MCP Servers", use_container_width=True):
+                    st.session_state.current_page = "mcp_management"
+                    st.rerun()
             
             # Add more navigation buttons here as needed
             # if st.button("📊 Dashboard", use_container_width=True):
@@ -95,8 +117,13 @@ class RagStreamlitUI:
         # Display the selected page
         if st.session_state.current_page == "chatbot":
             self._display_chatbot_page()
+        elif st.session_state.current_page == "chatbot_mcp":
+            self._display_chatbot_mcp_page()
         elif st.session_state.current_page == "import_data":
             self._display_import_data_page()
+        elif st.session_state.current_page == "mcp_management":
+            self._display_mcp_management_page()
+
         # Add more page conditions as needed
         # elif st.session_state.current_page == "dashboard":
         #     self._display_dashboard_page()
@@ -117,6 +144,21 @@ class RagStreamlitUI:
             st.error(f"Error displaying chatbot: {str(e)}")
 
     @staticmethod
+    def _display_chatbot_mcp_page():
+        """Display the Chatbot with MCP enhancement page"""
+        try:
+            # Import the chatbot module from the pages directory
+            from .pages import chatbot_mcp
+
+            # Call the run function
+            chatbot_mcp.run()
+        except ImportError as e:
+            st.error(f"Error loading chatbot with MCP: {str(e)}")
+            st.info("Make sure the chatbot_mcp.py file exists in the pages directory.")
+        except Exception as e:
+            st.error(f"Error displaying chatbot_mcp: {str(e)}")
+
+    @staticmethod
     def _display_import_data_page():
         """Display the Import Data page"""
         try:
@@ -131,6 +173,17 @@ class RagStreamlitUI:
         except Exception as e:
             st.error(f"Error displaying import data page: {str(e)}")
 
+    @staticmethod
+    def _display_mcp_management_page():
+        """Display the MCP Management page"""
+        try:
+            from .pages import mcp_management
+            mcp_management.run()
+        except ImportError as e:
+            st.error(f"MCP management not available: {str(e)}")
+            st.info("Install MCP dependencies: pip install mcp httpx anyio")
+        except Exception as e:
+            st.error(f"Error displaying MCP management: {str(e)}")
 
 def launch_streamlit_ui(config: Optional[Dict[str, Any]] = None):
     """
@@ -156,6 +209,10 @@ def launch_streamlit_ui(config: Optional[Dict[str, Any]] = None):
         "input_field_placeholder": "Ask me anything...",
         "input_field_help": "Type your question here and press Enter"
     }
+
+    # Add MCP status to config if available
+    if MCP_AVAILABLE:
+        config["mcp_available"] = True
     
     # Update with the provided config if any
     if config:
