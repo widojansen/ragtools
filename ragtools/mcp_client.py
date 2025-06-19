@@ -1,16 +1,16 @@
 """
 MCP Client for RAG Tools
-Provides integration with Model Context Protocol servers
+Provides integration with Model Context Protocol servers using direct JSON-RPC communication
 """
 
 import asyncio
 import json
 import logging
-from typing import Dict, List, Optional, Any
+import subprocess
+import os
+from typing import Dict, List, Optional, Any, Union
 from pathlib import Path
 from dataclasses import dataclass
-from mcp import ClientSession, StdioServerParameters
-from mcp.client.stdio import stdio_client
 
 logger = logging.getLogger(__name__)
 
@@ -32,17 +32,262 @@ class MCPServerConfig:
             self.env = {}
 
 
+class MCPConnection:
+    """Direct JSON-RPC connection to an MCP server"""
+    
+    def __init__(self, server_config: MCPServerConfig):
+        self.config = server_config
+        self.process: Optional[subprocess.Popen] = None
+        self.connected = False
+        self.request_id = 0
+        self.capabilities: Dict[str, Any] = {}
+        
+    def _get_next_id(self) -> int:
+        """Get next request ID"""
+        self.request_id += 1
+        return self.request_id
+    
+    async def connect(self) -> bool:
+        """Connect to the MCP server"""
+        try:
+            logger.info(f"Starting MCP server: {self.config.name}")
+            
+            # Prepare environment
+            env = os.environ.copy()
+            if self.config.env:
+                env.update(self.config.env)
+            
+            # Start the server process
+            self.process = subprocess.Popen(
+                [self.config.command] + self.config.args,
+                stdin=subprocess.PIPE,
+                stdout=subprocess.PIPE,
+                stderr=subprocess.PIPE,
+                text=True,
+                bufsize=0,
+                env=env
+            )
+            
+            # Wait for process to start
+            await asyncio.sleep(0.5)
+            
+            # Check if process is running
+            if self.process.poll() is not None:
+                stderr_output = self.process.stderr.read() if self.process.stderr else "No stderr"
+                logger.error(f"MCP server {self.config.name} died immediately: {stderr_output}")
+                return False
+            
+            logger.info(f"MCP server {self.config.name} process started")
+            
+            # Send initialization request
+            success = await self._initialize()
+            if success:
+                # Get server capabilities
+                await self._get_capabilities()
+                self.connected = True
+                logger.info(f"Successfully connected to MCP server: {self.config.name}")
+                return True
+            else:
+                logger.error(f"Failed to initialize MCP server: {self.config.name}")
+                await self.disconnect()
+                return False
+                
+        except Exception as e:
+            logger.error(f"Error connecting to MCP server {self.config.name}: {e}")
+            await self.disconnect()
+            return False
+    
+    async def _initialize(self) -> bool:
+        """Send initialization request to server"""
+        init_request = {
+            "jsonrpc": "2.0",
+            "id": self._get_next_id(),
+            "method": "initialize",
+            "params": {
+                "protocolVersion": "2024-11-05",
+                "capabilities": {
+                    "roots": {"listChanged": True},
+                    "sampling": {}
+                },
+                "clientInfo": {
+                    "name": "ragtools-mcp-client",
+                    "version": "1.0.0"
+                }
+            }
+        }
+        
+        response = await self._send_request(init_request)
+        return response is not None and "result" in response
+    
+    async def _get_capabilities(self):
+        """Get server capabilities (tools and resources)"""
+        # Get tools
+        tools_request = {
+            "jsonrpc": "2.0",
+            "id": self._get_next_id(),
+            "method": "tools/list"
+        }
+        
+        tools_response = await self._send_request(tools_request)
+        if tools_response and "result" in tools_response:
+            self.capabilities["tools"] = tools_response["result"].get("tools", [])
+        else:
+            self.capabilities["tools"] = []
+        
+        # Get resources (optional - not all servers support this)
+        resources_request = {
+            "jsonrpc": "2.0",
+            "id": self._get_next_id(),
+            "method": "resources/list"
+        }
+        
+        resources_response = await self._send_request(resources_request, timeout=5.0)
+        if resources_response and "result" in resources_response:
+            self.capabilities["resources"] = resources_response["result"].get("resources", [])
+        else:
+            self.capabilities["resources"] = []
+    
+    async def _send_request(self, request: Dict[str, Any], timeout: float = 10.0) -> Optional[Dict[str, Any]]:
+        """Send a JSON-RPC request and get response"""
+        if not self.process or not self.process.stdin or not self.process.stdout:
+            logger.error(f"Process not available for {self.config.name}")
+            return None
+        
+        try:
+            # Send request
+            request_json = json.dumps(request) + "\n"
+            self.process.stdin.write(request_json)
+            self.process.stdin.flush()
+            
+            # Read response with timeout
+            response_line = await asyncio.wait_for(
+                self._read_line_async(),
+                timeout=timeout
+            )
+            
+            if response_line:
+                return json.loads(response_line)
+            else:
+                logger.warning(f"No response received from {self.config.name}")
+                return None
+                
+        except asyncio.TimeoutError:
+            logger.error(f"Request timed out for {self.config.name}")
+            return None
+        except json.JSONDecodeError as e:
+            logger.error(f"Invalid JSON response from {self.config.name}: {e}")
+            return None
+        except Exception as e:
+            logger.error(f"Error sending request to {self.config.name}: {e}")
+            return None
+    
+    async def _read_line_async(self) -> str:
+        """Read a line from process stdout asynchronously"""
+        if not self.process or not self.process.stdout:
+            return ""
+        
+        loop = asyncio.get_event_loop()
+        
+        def read_line():
+            return self.process.stdout.readline()
+        
+        return await loop.run_in_executor(None, read_line)
+    
+    async def call_tool(self, tool_name: str, arguments: Dict[str, Any]) -> Optional[Dict[str, Any]]:
+        """Call a tool on the server"""
+        if not self.connected:
+            logger.error(f"Not connected to {self.config.name}")
+            return None
+        
+        request = {
+            "jsonrpc": "2.0",
+            "id": self._get_next_id(),
+            "method": "tools/call",
+            "params": {
+                "name": tool_name,
+                "arguments": arguments
+            }
+        }
+        
+        response = await self._send_request(request, timeout=30.0)
+        if response and "result" in response:
+            return response["result"]
+        else:
+            logger.error(f"Tool call failed for {tool_name} on {self.config.name}: {response}")
+            return None
+    
+    async def read_resource(self, uri: str) -> Optional[str]:
+        """Read a resource from the server"""
+        if not self.connected:
+            logger.error(f"Not connected to {self.config.name}")
+            return None
+        
+        request = {
+            "jsonrpc": "2.0",
+            "id": self._get_next_id(),
+            "method": "resources/read",
+            "params": {
+                "uri": uri
+            }
+        }
+        
+        response = await self._send_request(request)
+        if response and "result" in response:
+            contents = response["result"].get("contents", [])
+            if contents:
+                content = contents[0]
+                if content.get("type") == "text":
+                    return content.get("text")
+                elif "data" in content:
+                    return str(content["data"])
+        
+        return None
+    
+    def get_tools(self) -> List[Dict[str, Any]]:
+        """Get available tools"""
+        return self.capabilities.get("tools", [])
+    
+    def get_resources(self) -> List[Dict[str, Any]]:
+        """Get available resources"""
+        return self.capabilities.get("resources", [])
+    
+    async def disconnect(self):
+        """Disconnect from the server"""
+        if self.process:
+            logger.info(f"Disconnecting from MCP server: {self.config.name}")
+            self.process.terminate()
+            
+            try:
+                await asyncio.wait_for(
+                    self._wait_for_process(),
+                    timeout=5.0
+                )
+                logger.info(f"Server {self.config.name} disconnected gracefully")
+            except asyncio.TimeoutError:
+                logger.warning(f"Server {self.config.name} didn't terminate gracefully, killing...")
+                self.process.kill()
+                await self._wait_for_process()
+                logger.info(f"Server {self.config.name} killed")
+            
+            self.process = None
+            self.connected = False
+    
+    async def _wait_for_process(self):
+        """Wait for process to terminate"""
+        if self.process:
+            loop = asyncio.get_event_loop()
+            await loop.run_in_executor(None, self.process.wait)
+
+
 class MCPClient:
     """
     MCP Client for RAG Tools
-    Manages connections to MCP servers and provides access to their tools and resources
+    Manages connections to MCP servers using direct JSON-RPC communication
     """
 
     def __init__(self, config_path: Optional[str] = None):
         self.servers: Dict[str, MCPServerConfig] = {}
-        self.sessions: Dict[str, ClientSession] = {}
-        self.server_capabilities: Dict[str, Dict] = {}
-        self._context_managers: Dict[str, Any] = {}  # Store active context managers
+        self.connections: Dict[str, MCPConnection] = {}
         self.config_path = config_path or "mcp_config.json"
         self._load_config()
 
@@ -114,81 +359,28 @@ class MCPClient:
             logger.info(f"Server {server_name} is disabled")
             return False
 
-        context_manager = None
-        try:
-            # Create server parameters
-            server_params = StdioServerParameters(
-                command=server_config.command,
-                args=server_config.args,
-                env=server_config.env
-            )
+        # Disconnect if already connected
+        if server_name in self.connections:
+            await self.disconnect_server(server_name)
 
-            # Connect to server - store context manager for proper lifecycle management
-            context_manager = stdio_client(server_params)
-            read_stream, write_stream = await context_manager.__aenter__()
-            
-            # Store context manager for later cleanup
-            self._context_managers[server_name] = context_manager
-            
-            session = ClientSession(read_stream, write_stream)
-
-            # Initialize session
-            await session.initialize()
-
-            # Get server capabilities
-            capabilities = await session.list_tools()
-
-            self.sessions[server_name] = session
-            self.server_capabilities[server_name] = {
-                'tools': capabilities.tools if capabilities else [],
-                'resources': []
-            }
-
-            # Try to get resources
-            try:
-                resources = await session.list_resources()
-                self.server_capabilities[server_name]['resources'] = resources.resources if resources else []
-            except Exception:
-                # Some servers might not support resources
-                pass
-
-            logger.info(f"Connected to MCP server: {server_name}")
+        connection = MCPConnection(server_config)
+        success = await connection.connect()
+        
+        if success:
+            self.connections[server_name] = connection
+            logger.info(f"Successfully connected to MCP server: {server_name}")
             return True
-
-        except Exception as e:
-            logger.error(f"Failed to connect to server {server_name}: {e}")
-            
-            # Clean up context manager if connection failed
-            if context_manager and server_name in self._context_managers:
-                try:
-                    await context_manager.__aexit__(None, None, None)
-                    del self._context_managers[server_name]
-                except Exception as cleanup_error:
-                    logger.error(f"Error cleaning up context manager for {server_name}: {cleanup_error}")
-            
+        else:
+            logger.error(f"Failed to connect to MCP server: {server_name}")
             return False
 
     async def disconnect_server(self, server_name: str):
         """Disconnect from an MCP server"""
-        if server_name in self.sessions:
-            try:
-                # Close session if it has a close method
-                session = self.sessions[server_name]
-                if hasattr(session, 'close'):
-                    await session.close()
-                del self.sessions[server_name]
-                
-                # Clean up context manager
-                if server_name in self._context_managers:
-                    context_manager = self._context_managers[server_name]
-                    await context_manager.__aexit__(None, None, None)
-                    del self._context_managers[server_name]
-                
-                if server_name in self.server_capabilities:
-                    del self.server_capabilities[server_name]
-                logger.info(f"Disconnected from MCP server: {server_name}")
-            except Exception as e:
-                logger.error(f"Error disconnecting from {server_name}: {e}")
+        if server_name in self.connections:
+            connection = self.connections[server_name]
+            await connection.disconnect()
+            del self.connections[server_name]
+            logger.info(f"Disconnected from MCP server: {server_name}")
 
     async def connect_all_servers(self):
         """Connect to all enabled MCP servers"""
@@ -205,7 +397,7 @@ class MCPClient:
     async def disconnect_all_servers(self):
         """Disconnect from all connected MCP servers"""
         tasks = []
-        for server_name in list(self.sessions.keys()):
+        for server_name in list(self.connections.keys()):
             tasks.append(self.disconnect_server(server_name))
 
         if tasks:
@@ -214,67 +406,45 @@ class MCPClient:
     async def cleanup(self):
         """Cleanup all resources and connections"""
         await self.disconnect_all_servers()
-        
-        # Final cleanup of any remaining context managers
-        for server_name, context_manager in list(self._context_managers.items()):
-            try:
-                await context_manager.__aexit__(None, None, None)
-                del self._context_managers[server_name]
-            except Exception as e:
-                logger.error(f"Error during final cleanup of {server_name}: {e}")
-
-    def __del__(self):
-        """Destructor to ensure cleanup"""
-        if hasattr(self, '_context_managers') and self._context_managers:
-            logger.warning("MCPClient deleted with active connections. Use cleanup() method for proper shutdown.")
 
     def get_available_tools(self) -> Dict[str, List[Dict]]:
         """Get all available tools from connected servers"""
         return {
-            server_name: caps.get('tools', [])
-            for server_name, caps in self.server_capabilities.items()
+            server_name: connection.get_tools()
+            for server_name, connection in self.connections.items()
+            if connection.connected
         }
 
     def get_available_resources(self) -> Dict[str, List[Dict]]:
         """Get all available resources from connected servers"""
         return {
-            server_name: caps.get('resources', [])
-            for server_name, caps in self.server_capabilities.items()
+            server_name: connection.get_resources()
+            for server_name, connection in self.connections.items()
+            if connection.connected
         }
 
     async def call_tool(self, server_name: str, tool_name: str, arguments: Dict[str, Any]) -> Optional[Dict]:
         """Call a tool on a specific MCP server"""
-        if server_name not in self.sessions:
+        if server_name not in self.connections:
             logger.error(f"Server {server_name} not connected")
             return None
 
-        try:
-            session = self.sessions[server_name]
-            result = await session.call_tool(tool_name, arguments)
-            return result.content if hasattr(result, 'content') and result.content else None
-        except Exception as e:
-            logger.error(f"Error calling tool {tool_name} on {server_name}: {e}")
-            return None
+        connection = self.connections[server_name]
+        result = await connection.call_tool(tool_name, arguments)
+        
+        # Extract content from result if it exists
+        if result and "content" in result:
+            return result["content"]
+        return result
 
     async def read_resource(self, server_name: str, uri: str) -> Optional[str]:
         """Read a resource from a specific MCP server"""
-        if server_name not in self.sessions:
+        if server_name not in self.connections:
             logger.error(f"Server {server_name} not connected")
             return None
 
-        try:
-            session = self.sessions[server_name]
-            result = await session.read_resource(uri)
-            if result and hasattr(result, 'contents') and result.contents:
-                content = result.contents[0]
-                if hasattr(content, 'text'):
-                    return content.text
-                elif hasattr(content, 'data'):
-                    return str(content.data)
-            return None
-        except Exception as e:
-            logger.error(f"Error reading resource {uri} from {server_name}: {e}")
-            return None
+        connection = self.connections[server_name]
+        return await connection.read_resource(uri)
 
     def add_server_config(self, config: MCPServerConfig):
         """Add a new server configuration"""
@@ -311,7 +481,7 @@ class MCPClient:
     def get_server_status(self) -> Dict[str, str]:
         """Get connection status of all servers"""
         return {
-            name: "connected" if name in self.sessions else "disconnected"
+            name: "connected" if name in self.connections and self.connections[name].connected else "disconnected"
             for name in self.servers.keys()
         }
 
@@ -350,10 +520,22 @@ class MCPRagIntegration:
                     except Exception as e:
                         logger.error(f"Web search failed: {e}")
 
-        # Example: Access filesystem resources if available
-        if 'filesystem' in available_resources:
-            # Could search for relevant files based on query
-            pass
+        # Example: Search filesystem if available
+        if 'filesystem' in available_tools:
+            filesystem_tools = available_tools['filesystem']
+            for tool in filesystem_tools:
+                if tool.get('name') == 'search_files':
+                    try:
+                        # Search for files related to the query
+                        search_result = await self.mcp_client.call_tool(
+                            'filesystem',
+                            'search_files',
+                            {'path': '.', 'pattern': query}
+                        )
+                        if search_result:
+                            enhanced_context['filesystem_search_results'] = search_result
+                    except Exception as e:
+                        logger.error(f"Filesystem search failed: {e}")
 
         return enhanced_context
 
@@ -367,7 +549,7 @@ class MCPRagIntegration:
             # Parse server name from URI (assuming format: server://path)
             if '://' in uri:
                 server_name = uri.split('://')[0]
-                if server_name in self.mcp_client.sessions:
+                if server_name in self.mcp_client.connections:
                     content = await self.mcp_client.read_resource(server_name, uri)
                     if content:
                         context_parts.append(f"From {uri}:\n{content}")

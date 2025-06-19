@@ -2,7 +2,7 @@ from setuptools import setup, find_packages
 
 setup(
     name="ragtools",
-    version="0.2.4.0",
+    version="0.2.5.1",
     packages=find_packages(),  # This is crucial for proper package discovery
     install_requires=[
         "streamlit",
@@ -14,7 +14,7 @@ setup(
         "langchain-chroma",
         "pypdf",
         # MCP client dependencies
-        "mcp>=1.0.0",
+        "mcp>=1.1.0",
         "httpx>=0.25.0",
         "anyio>=4.0.0",
         "pydantic>=2.0.0",

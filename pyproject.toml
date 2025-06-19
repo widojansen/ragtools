@@ -1,6 +1,6 @@
 [project]
 name = "ragtools"
-version = "0.2.4.0"
+version = "0.2.5.1"
 description = "Tools for RAG apps"
 readme = "README.md"
 requires-python = ">=3.12"
@@ -14,7 +14,7 @@ dependencies = [
     "langchain-chroma",
     "pypdf",
     # MCP client dependencies
-    "mcp>=1.0.0",
+    "mcp>=1.1.0",
     "httpx>=0.25.0",
     "anyio>=4.0.0",
     "pydantic>=2.0.0",

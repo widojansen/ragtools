@@ -60,11 +60,11 @@ def ask_llm(prompt: str, system_context: str = "", model_context: Dict[str, Any]
 def run():
     """Main chatbot interface with MCP enhancements"""
 
-    # Initialize session state
+    # Initialize session state with proper defaults
     if "messages" not in st.session_state:
         st.session_state.messages = []
 
-    if "model_context" not in st.session_state:
+    if "model_context" not in st.session_state or st.session_state.model_context is None:
         st.session_state.model_context = {}
 
     # Initialize MCP client if available
@@ -84,7 +84,7 @@ def run():
 
         if MCP_AVAILABLE and 'mcp_client' in st.session_state:
             mcp_client = st.session_state.mcp_client
-            connected_servers = len([s for s in mcp_client.sessions.keys()])
+            connected_servers = len([s for s in mcp_client.connections.keys() if mcp_client.connections[s].connected])
             if connected_servers > 0:
                 st.success(f"🔌 {connected_servers} MCP server(s) connected")
             else:
@@ -137,10 +137,11 @@ def run():
                 st.session_state.use_web_search = use_web_search
 
             # Show connected servers
-            if mcp_client.sessions:
+            if mcp_client.connections:
                 st.write("**Connected Servers:**")
-                for server_name in mcp_client.sessions.keys():
-                    st.write(f"✅ {server_name}")
+                for server_name, connection in mcp_client.connections.items():
+                    if connection.connected:
+                        st.write(f"✅ {server_name}")
             else:
                 st.write("No MCP servers connected")
 
@@ -186,10 +187,15 @@ def run():
         with st.chat_message("assistant"):
             with st.spinner("Thinking..."):
                 try:
+                    # Ensure model_context is always a dictionary
+                    current_context = st.session_state.model_context
+                    if current_context is None:
+                        current_context = {}
+                    
                     response, updated_context = ask_llm(
                         prompt,
                         st.session_state.get("system_context", ""),
-                        st.session_state.model_context.copy()
+                        current_context.copy()
                     )
 
                     # Update model context
@@ -246,14 +252,14 @@ def get_mcp_status() -> Dict[str, Any]:
         return {"available": False, "connected_servers": 0, "available_tools": 0}
 
     mcp_client = st.session_state.mcp_client
-    connected_servers = len(mcp_client.sessions)
+    connected_servers = len([c for c in mcp_client.connections.values() if c.connected])
     available_tools = sum(len(tools) for tools in mcp_client.get_available_tools().values())
 
     return {
         "available": True,
         "connected_servers": connected_servers,
         "available_tools": available_tools,
-        "server_names": list(mcp_client.sessions.keys())
+        "server_names": [name for name, conn in mcp_client.connections.items() if conn.connected]
     }
 
 
