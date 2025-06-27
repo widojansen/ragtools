@@ -217,7 +217,7 @@ def launch_streamlit_ui(config: Optional[Dict[str, Any]] = None):
     # Update with the provided config if any
     if config:
         ui_config.update(config)
-        print(f"Launching Streamlit UI with config: {ui_config}")
+        #print(f"Launching Streamlit UI with config: {ui_config}")
 
     # Create the UI
     ui = RagStreamlitUI(**ui_config)

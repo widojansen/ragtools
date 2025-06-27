@@ -74,7 +74,11 @@ class MCPConnection:
             # Check if process is running
             if self.process.poll() is not None:
                 stderr_output = self.process.stderr.read() if self.process.stderr else "No stderr"
-                logger.error(f"MCP server {self.config.name} died immediately: {stderr_output}")
+                stdout_output = self.process.stdout.read() if self.process.stdout else "No stdout"
+                logger.error(f"MCP server {self.config.name} died immediately. Command: {self.config.command} {' '.join(self.config.args)}")
+                logger.error(f"Stderr: {stderr_output}")
+                logger.error(f"Stdout: {stdout_output}")
+                logger.error(f"Return code: {self.process.returncode}")
                 return False
             
             logger.info(f"MCP server {self.config.name} process started")
@@ -294,19 +298,26 @@ class MCPClient:
     def _load_config(self):
         """Load MCP server configurations from file"""
         config_file = Path(self.config_path)
+        logger.info(f"Looking for MCP config at: {config_file.absolute()}")
+        
         if config_file.exists():
             try:
                 with open(config_file, 'r') as f:
                     config_data = json.load(f)
+                    logger.info(f"Loaded config data: {config_data}")
+                    
                     for server_name, server_config in config_data.get('servers', {}).items():
                         self.servers[server_name] = MCPServerConfig(
                             name=server_name,
                             **server_config
                         )
+                        logger.info(f"Server {server_name} is {'enabled' if server_config.get('enabled') else 'disabled'}")
+                        
                 logger.info(f"Loaded {len(self.servers)} MCP server configurations")
             except Exception as e:
                 logger.error(f"Failed to load MCP config: {e}")
         else:
+            logger.warning(f"Config file not found at {config_file.absolute()}, creating default config")
             # Create default config
             self._create_default_config()
 
@@ -384,15 +395,28 @@ class MCPClient:
 
     async def connect_all_servers(self):
         """Connect to all enabled MCP servers"""
+        logger.info(f"Total servers configured: {len(self.servers)}")
+        
+        enabled_servers = [name for name, config in self.servers.items() if config.enabled]
+        disabled_servers = [name for name, config in self.servers.items() if not config.enabled]
+        
+        logger.info(f"Enabled servers: {enabled_servers}")
+        logger.info(f"Disabled servers: {disabled_servers}")
+        
         tasks = []
         for server_name, server_config in self.servers.items():
             if server_config.enabled:
+                logger.info(f"Attempting to connect to enabled server: {server_name}")
                 tasks.append(self.connect_server(server_name))
+            else:
+                logger.info(f"Server {server_name} is disabled")
 
         if tasks:
             results = await asyncio.gather(*tasks, return_exceptions=True)
             connected = sum(1 for r in results if r is True)
             logger.info(f"Connected to {connected}/{len(tasks)} MCP servers")
+        else:
+            logger.warning("No enabled servers found to connect to")
 
     async def disconnect_all_servers(self):
         """Disconnect from all connected MCP servers"""
@@ -496,48 +520,294 @@ class MCPRagIntegration:
 
     async def enhance_query_with_mcp(self, query: str, context: Optional[Dict[str, Any]] = None) -> Dict[str, Any]:
         """
-        Enhance a RAG query using MCP tools and resources
+        Abstract MCP enhancement that works with any MCP server and tools
         """
         enhanced_context = context or {}
 
-        # Get available tools and resources
+        # Get available tools and resources from all connected servers
         available_tools = self.mcp_client.get_available_tools()
         available_resources = self.mcp_client.get_available_resources()
 
-        # Example: Use web search if available
-        if 'brave-search' in available_tools:
-            search_tools = available_tools['brave-search']
-            for tool in search_tools:
-                if tool.get('name') == 'brave_web_search':
-                    try:
-                        search_result = await self.mcp_client.call_tool(
-                            'brave-search',
-                            'brave_web_search',
-                            {'query': query, 'count': 3}
-                        )
-                        if search_result:
-                            enhanced_context['web_search_results'] = search_result
-                    except Exception as e:
-                        logger.error(f"Web search failed: {e}")
+        logger.info(f"Available MCP servers and tools: {list(available_tools.keys())}")
 
-        # Example: Search filesystem if available
-        if 'filesystem' in available_tools:
-            filesystem_tools = available_tools['filesystem']
-            for tool in filesystem_tools:
-                if tool.get('name') == 'search_files':
-                    try:
-                        # Search for files related to the query
-                        search_result = await self.mcp_client.call_tool(
-                            'filesystem',
-                            'search_files',
-                            {'path': '.', 'pattern': query}
-                        )
-                        if search_result:
-                            enhanced_context['filesystem_search_results'] = search_result
-                    except Exception as e:
-                        logger.error(f"Filesystem search failed: {e}")
+        # Special handling for Terminal Server when tools aren't listed properly
+        if 'Terminal Server' in available_tools and not available_tools['Terminal Server']:
+            logger.info("Terminal Server found but no tools listed - adding fallback tools")
+            available_tools['Terminal Server'] = [
+                {'name': 'terminal_cmd', 'description': 'Execute terminal commands', 'inputSchema': {'properties': {'command': {'type': 'string'}}}}
+            ]
+
+        # Analyze query to determine intent and relevant tools
+        query_analysis = await self._analyze_query_intent(query, available_tools)
+        
+        # Execute relevant tools based on analysis
+        for server_name, tools_to_call in query_analysis.items():
+            for tool_call in tools_to_call:
+                try:
+                    tool_name = tool_call['tool']
+                    args = tool_call['args']
+                    intent = tool_call['intent']
+                    
+                    logger.info(f"Calling {server_name}.{tool_name} with intent '{intent}'")
+                    
+                    result = await self.mcp_client.call_tool(server_name, tool_name, args)
+                    
+                    if result:
+                        # Store result with generic key based on intent
+                        result_key = f"mcp_{intent}_results"
+                        enhanced_context[result_key] = {
+                            'server': server_name,
+                            'tool': tool_name,
+                            'intent': intent,
+                            'data': result,
+                            'args': args
+                        }
+                        logger.info(f"Successfully executed {server_name}.{tool_name} for intent '{intent}'")
+                    
+                except Exception as e:
+                    logger.error(f"Failed to call {server_name}.{tool_name}: {e}")
 
         return enhanced_context
+
+    async def _analyze_query_intent(self, query: str, available_tools: Dict[str, List[Dict]]) -> Dict[str, List[Dict]]:
+        """
+        Analyze query to determine which MCP tools to call based on available capabilities
+        """
+        query_lower = query.lower()
+        tools_to_call = {}
+
+        for server_name, tools in available_tools.items():
+            server_tools = []
+            
+            for tool in tools:
+                tool_name = tool.get('name', '')
+                tool_desc = tool.get('description', '').lower()
+                
+                # Determine intent and tool relevance based on keywords and descriptions
+                intent, args = await self._match_tool_to_query(query_lower, tool_name, tool_desc, tool.get('inputSchema', {}), server_name)
+                
+                if intent:
+                    server_tools.append({
+                        'tool': tool_name,
+                        'intent': intent,
+                        'args': args
+                    })
+            
+            if server_tools:
+                tools_to_call[server_name] = server_tools
+
+        return tools_to_call
+
+    async def _match_tool_to_query(self, query: str, tool_name: str, tool_desc: str, schema: Dict, server_name: str = '') -> tuple[Optional[str], Dict]:
+        """
+        Match a query to a specific tool and generate appropriate arguments
+        """
+        # Terminal/shell command intent - more flexible matching
+        if any(kw in query for kw in ['run', 'execute', 'command', 'terminal', 'shell', 'bash', 'zsh', 'cmd']):
+            # Check tool name and description for command-related keywords
+            if (any(kw in tool_name.lower() for kw in ['command', 'execute', 'run', 'shell', 'terminal', 'bash', 'cmd']) or
+                any(kw in tool_desc for kw in ['command', 'execute', 'run', 'shell', 'terminal', 'bash', 'cmd'])):
+                return 'terminal_command', await self._generate_command_args(query, schema)
+            
+            # If server name suggests it's a terminal/command server, use any tool from that server
+            if any(kw in server_name.lower() for kw in ['terminal', 'command', 'shell', 'cmd']):
+                return 'terminal_command', await self._generate_command_args(query, schema)
+            
+            # Special case: hardcode support for specific terminal tools
+            if tool_name in ['terminal_cmd', 'execute_command', 'run_command', 'shell_exec']:
+                return 'terminal_command', await self._generate_command_args(query, schema)
+
+        # Common system commands - automatically detect them
+        common_commands = ['ls', 'pwd', 'whoami', 'date', 'ps', 'top', 'df', 'du', 'free', 'uname', 'which', 'find', 'grep', 'cat', 'head', 'tail', 'mkdir', 'rmdir', 'cp', 'mv', 'rm']
+        query_words = query.lower().split()
+        if any(cmd in query_words for cmd in common_commands):
+            # Check tool or server for command capability
+            if (any(kw in tool_name.lower() for kw in ['command', 'execute', 'run', 'shell', 'terminal']) or
+                any(kw in server_name.lower() for kw in ['terminal', 'command', 'shell', 'cmd'])):
+                return 'terminal_command', await self._generate_command_args(query, schema)
+
+        # Directory/file listing intent
+        if any(kw in query for kw in ['show', 'list', 'content', 'folder', 'directory', 'files']):
+            if any(kw in tool_name.lower() for kw in ['list', 'directory', 'files', 'tree']):
+                return 'directory_listing', await self._generate_file_args(query, schema)
+            if any(kw in tool_desc for kw in ['list', 'directory', 'files', 'folder']):
+                return 'directory_listing', await self._generate_file_args(query, schema)
+            # If no file tools available, try with shell command
+            if (any(kw in tool_name.lower() for kw in ['command', 'execute', 'run', 'shell', 'terminal']) or
+                any(kw in server_name.lower() for kw in ['terminal', 'command', 'shell', 'cmd'])):
+                return 'terminal_command', await self._generate_command_args(f"ls {self._extract_path_from_query(query)}", schema)
+
+        # File operations intent
+        if any(kw in query for kw in ['read', 'open', 'view', 'show file']):
+            if any(kw in tool_name.lower() for kw in ['read', 'get', 'file']):
+                return 'file_operation', await self._generate_file_args(query, schema)
+            # If no file tools available, try with shell command
+            if (any(kw in tool_name.lower() for kw in ['command', 'execute', 'run', 'shell', 'terminal']) or
+                any(kw in server_name.lower() for kw in ['terminal', 'command', 'shell', 'cmd'])):
+                return 'terminal_command', await self._generate_command_args(f"cat {self._extract_file_from_query(query)}", schema)
+
+        # Search intent
+        if any(kw in query for kw in ['search', 'find', 'lookup']):
+            if any(kw in tool_name.lower() for kw in ['search', 'find', 'query']):
+                return 'search', await self._generate_search_args(query, schema)
+            if any(kw in tool_desc for kw in ['search', 'find', 'query']):
+                return 'search', await self._generate_search_args(query, schema)
+
+        # Web search intent
+        if any(kw in tool_name.lower() for kw in ['web', 'brave', 'search']) and 'local' not in query:
+            return 'web_search', await self._generate_search_args(query, schema)
+
+        # Database/data intent
+        if any(kw in query for kw in ['database', 'query', 'sql', 'data']):
+            if any(kw in tool_name.lower() for kw in ['db', 'database', 'sql', 'query']):
+                return 'database_query', await self._generate_db_args(query, schema)
+
+        return None, {}
+
+    def _extract_path_from_query(self, query: str) -> str:
+        """Extract path from query for directory operations"""
+        if 'desktop' in query.lower():
+            return '/Users/widojansen/Desktop'
+        elif 'home' in query.lower():
+            return '/Users/widojansen'
+        else:
+            return '.'
+
+    def _extract_file_from_query(self, query: str) -> str:
+        """Extract filename from query for file operations"""
+        # Simple extraction - could be made more sophisticated
+        words = query.split()
+        for word in words:
+            if '.' in word and not word.startswith('.'):  # Likely a filename
+                return word
+        return '.'
+
+    async def _generate_file_args(self, query: str, schema: Dict) -> Dict:
+        """Generate file operation arguments based on query and tool schema"""
+        args = {}
+        properties = schema.get('properties', {})
+        
+        # Handle path parameter
+        if 'path' in properties:
+            if 'desktop' in query.lower():
+                args['path'] = '/Users/widojansen/Desktop'  # Could be made more generic
+            elif 'home' in query.lower():
+                args['path'] = '/Users/widojansen'
+            else:
+                args['path'] = '.'  # Default to current directory
+        
+        # Handle directory_path parameter (alternative naming)
+        if 'directory_path' in properties:
+            args['directory_path'] = args.get('path', '.')
+            
+        return args
+
+    async def _generate_search_args(self, query: str, schema: Dict) -> Dict:
+        """Generate search arguments based on query and tool schema"""
+        args = {}
+        properties = schema.get('properties', {})
+        
+        if 'query' in properties:
+            args['query'] = query
+        if 'q' in properties:
+            args['q'] = query
+        if 'pattern' in properties:
+            args['pattern'] = '*'  # Default pattern
+        if 'count' in properties:
+            args['count'] = 3
+        if 'path' in properties:
+            args['path'] = '.'
+            
+        return args
+
+    async def _generate_db_args(self, query: str, schema: Dict) -> Dict:
+        """Generate database arguments based on query and tool schema"""
+        args = {}
+        properties = schema.get('properties', {})
+        
+        if 'query' in properties:
+            args['query'] = query
+        if 'sql' in properties:
+            args['sql'] = query
+            
+        return args
+
+    async def _generate_command_args(self, query: str, schema: Dict) -> Dict:
+        """Generate terminal command arguments based on query and tool schema"""
+        args = {}
+        properties = schema.get('properties', {})
+        
+        # Extract command from query
+        command = self._extract_command_from_query(query)
+        
+        # Handle different parameter names that command tools might use
+        if 'command' in properties:
+            args['command'] = command
+        elif 'cmd' in properties:
+            args['cmd'] = command
+        elif 'shell_command' in properties:
+            args['shell_command'] = command
+        elif 'script' in properties:
+            args['script'] = command
+        elif 'code' in properties:
+            args['code'] = command
+        
+        # Handle additional common parameters
+        if 'shell' in properties:
+            args['shell'] = '/bin/bash'  # Default shell
+        if 'timeout' in properties:
+            args['timeout'] = 30  # Default timeout
+        if 'working_directory' in properties or 'cwd' in properties:
+            path = self._extract_path_from_query(query)
+            if 'working_directory' in properties:
+                args['working_directory'] = path
+            else:
+                args['cwd'] = path
+                
+        return args
+
+    def _extract_command_from_query(self, query: str) -> str:
+        """Extract shell command from natural language query"""
+        query_lower = query.lower()
+        
+        # If query already contains shell command keywords, extract the command
+        if any(kw in query_lower for kw in ['run', 'execute', 'command']):
+            # Look for quoted commands or commands after keywords
+            words = query.split()
+            for i, word in enumerate(words):
+                if word.lower() in ['run', 'execute', 'command'] and i + 1 < len(words):
+                    # Return everything after the keyword
+                    return ' '.join(words[i + 1:])
+        
+        # Common command patterns
+        if 'current directory' in query_lower or 'working directory' in query_lower:
+            return 'pwd'
+        elif 'who am i' in query_lower or 'current user' in query_lower:
+            return 'whoami'
+        elif 'system info' in query_lower or 'system information' in query_lower:
+            return 'uname -a'
+        elif 'disk space' in query_lower or 'disk usage' in query_lower:
+            return 'df -h'
+        elif 'memory usage' in query_lower or 'ram usage' in query_lower:
+            return 'free -h'
+        elif 'running processes' in query_lower or 'process list' in query_lower:
+            return 'ps aux'
+        elif 'environment variables' in query_lower or 'env vars' in query_lower:
+            return 'env'
+        elif 'network interfaces' in query_lower:
+            return 'ifconfig'
+        
+        # If the query contains common commands, return it as-is
+        common_commands = ['ls', 'pwd', 'whoami', 'date', 'ps', 'top', 'df', 'du', 'free', 'uname', 'which', 'find', 'grep', 'cat', 'head', 'tail']
+        query_words = query.split()
+        for cmd in common_commands:
+            if cmd in query_words:
+                # Find the command and return it with its arguments
+                cmd_index = query_words.index(cmd)
+                return ' '.join(query_words[cmd_index:])
+        
+        # Default: return the query as-is (user might have typed a direct command)
+        return query
 
     async def get_context_from_resources(self, resource_uris: List[str]) -> str:
         """
